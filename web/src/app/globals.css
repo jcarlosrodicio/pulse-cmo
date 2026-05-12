@@ -1,0 +1,335 @@
+@import "tailwindcss";
+@import "./tokens.css";
+
+/* fonts loaded in layout.tsx via next/font */
+
+* { box-sizing: border-box; }
+
+html, body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-sans);
+  font-size: 13.5px;
+  line-height: 1.55;
+  margin: 0;
+  padding: 0;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-feature-settings: "ss01", "ss02", "cv11";
+}
+
+/* sharper, refined heading rhythm */
+h1, h2, h3, h4 { font-family: var(--font-sans); letter-spacing: -0.012em; }
+
+/* tabular numerals for scores/timers/counters */
+.tabular { font-variant-numeric: tabular-nums; }
+
+::selection {
+  background: var(--selection-bg);
+  color: var(--selection-fg);
+}
+
+/* —— terminal —— */
+.terminal {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--fg-dim);
+  white-space: pre-wrap;
+  font-feature-settings: "ss01", "ss02";
+  background: var(--term-bg);
+  transition: height 200ms cubic-bezier(0.32, 0.72, 0, 1), background 160ms ease;
+}
+.terminal .ln-thought { color: var(--term-thought); }
+.terminal .ln-tool    { color: var(--accent); }
+.terminal .ln-result  { color: var(--term-result); }
+.terminal .ln-text    { color: var(--term-text); }
+.terminal .ln-error   { color: var(--danger); }
+.terminal .ln-meta    { color: var(--term-meta); }
+.terminal .ln-user    { color: var(--info); }
+
+.terminal .caret {
+  display: inline-block;
+  width: 7px;
+  height: 12px;
+  background: var(--accent);
+  vertical-align: -1px;
+  margin-left: 2px;
+  animation: caret-blink 1s steps(2) infinite;
+}
+
+@keyframes caret-blink {
+  0% { opacity: 1; }
+  50% { opacity: 0.2; }
+  100% { opacity: 1; }
+}
+
+/* —— live pulse —— */
+.pulse-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--accent);
+  box-shadow: 0 0 8px var(--accent-glow);
+  position: relative;
+}
+.pulse-dot::after {
+  content: "";
+  position: absolute;
+  inset: -3px;
+  border-radius: 999px;
+  border: 1px solid var(--accent);
+  animation: pulse-ring 1.6s cubic-bezier(0.22, 1, 0.36, 1) infinite;
+}
+@keyframes pulse-ring {
+  0%   { transform: scale(0.7); opacity: 0.9; }
+  100% { transform: scale(2.3); opacity: 0; }
+}
+
+.pulse-dot.dim { background: var(--muted); box-shadow: none; }
+.pulse-dot.dim::after { display: none; }
+
+/* —— scanline texture for "monitor" feel —— */
+.scanlines::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image: repeating-linear-gradient(
+    0deg,
+    rgba(255, 255, 255, 0.012) 0px,
+    rgba(255, 255, 255, 0.012) 1px,
+    transparent 1px,
+    transparent 4px
+  );
+  pointer-events: none;
+  border-radius: inherit;
+  z-index: 0;
+}
+
+/* —— prose styling for markdown content —— */
+.prose-pulse {
+  color: var(--fg);
+  line-height: 1.65;
+  font-size: 13.5px;
+}
+.prose-pulse h1, .prose-pulse h2, .prose-pulse h3 {
+  font-weight: 600;
+  letter-spacing: -0.012em;
+  margin: 1.4em 0 0.5em;
+  color: var(--fg);
+}
+.prose-pulse h1 { font-size: 1.35em; }
+.prose-pulse h2 { font-size: 1.15em; margin-top: 1.6em; }
+.prose-pulse h2:first-child { margin-top: 0; }
+.prose-pulse h3 { font-size: 1.0em; }
+.prose-pulse p { margin: 0.55em 0; color: var(--fg-dim); }
+.prose-pulse strong { color: var(--fg); font-weight: 600; }
+.prose-pulse code {
+  background: var(--elevated);
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 0.88em;
+  color: var(--accent);
+}
+.prose-pulse pre {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 12px 14px;
+  overflow-x: auto;
+  font-size: 12px;
+  margin: 0.8em 0;
+}
+.prose-pulse pre code {
+  background: transparent;
+  padding: 0;
+  color: #d4d4d8;
+}
+.prose-pulse ul, .prose-pulse ol { padding-left: 1.4em; margin: 0.55em 0; }
+.prose-pulse li { margin: 0.25em 0; color: var(--fg-dim); }
+.prose-pulse li > strong { color: var(--fg); }
+.prose-pulse a { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; text-decoration-color: var(--accent-strong); }
+.prose-pulse blockquote {
+  border-left: 2px solid var(--accent);
+  padding: 0.4em 1em;
+  margin: 1em 0;
+  background: var(--accent-soft);
+  color: var(--fg-dim);
+}
+.prose-pulse hr { border: 0; border-top: 1px solid var(--border); margin: 1.6em 0; }
+
+/* —— scrollbars: thin, sharp —— */
+*::-webkit-scrollbar { width: 6px; height: 6px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 999px; }
+*::-webkit-scrollbar-thumb:hover { background: var(--muted); }
+
+/* —— sheet animation —— */
+.sheet-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(2px);
+  z-index: 40;
+  animation: fade-in 160ms ease-out;
+}
+.sheet-panel {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 100%;
+  max-width: 640px;
+  background: var(--surface);
+  border-left: 1px solid var(--border);
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  animation: slide-in-right 260ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+@keyframes slide-in-right {
+  from { transform: translateX(40px); opacity: 0; }
+  to   { transform: translateX(0); opacity: 1; }
+}
+@keyframes fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+/* —— modal animation —— */
+.modal-card {
+  animation: pop-in 180ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+@keyframes pop-in {
+  from { transform: scale(0.96); opacity: 0; }
+  to   { transform: scale(1); opacity: 1; }
+}
+
+/* —— circular gauge —— */
+.gauge {
+  position: relative;
+  width: 56px;
+  height: 56px;
+}
+.gauge svg { width: 100%; height: 100%; transform: rotate(-90deg); }
+.gauge-track { stroke: rgba(255,255,255,0.06); }
+.gauge-arc { transition: stroke-dasharray 400ms ease-out; }
+.gauge-good   { stroke: var(--accent); }
+.gauge-mid    { stroke: var(--warn); }
+.gauge-bad    { stroke: var(--danger); }
+
+/* —— shimmer for loading —— */
+.shimmer {
+  background: linear-gradient(
+    90deg,
+    var(--shimmer-from) 0%,
+    var(--shimmer-mid) 50%,
+    var(--shimmer-from) 100%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.6s infinite linear;
+  border-radius: 4px;
+}
+@keyframes shimmer {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* —— focus rings: subtle but visible —— */
+button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
+button:focus, a:focus, input:focus, textarea:focus, select:focus {
+  outline: none;
+}
+
+/* —— subtle hover lift on cards —— */
+.card-hover {
+  transition: border-color 160ms ease, background 160ms ease, transform 160ms ease;
+}
+.card-hover:hover {
+  border-color: var(--border-strong);
+  background: var(--elevated);
+}
+
+/* —— grid pattern for empty states —— */
+.bg-grid {
+  background-image:
+    linear-gradient(rgba(255,255,255,0.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,0.025) 1px, transparent 1px);
+  background-size: 28px 28px;
+}
+
+/* —— mobile bottom nav backdrop —— */
+.bottom-nav-blur {
+  backdrop-filter: blur(16px) saturate(160%);
+  -webkit-backdrop-filter: blur(16px) saturate(160%);
+}
+
+/* —— bg-grid (light + dark variants) —— */
+.bg-grid {
+  background-image:
+    linear-gradient(var(--border) 1px, transparent 1px),
+    linear-gradient(90deg, var(--border) 1px, transparent 1px);
+  background-size: 28px 28px;
+}
+
+/* —— toast appearance —— */
+@keyframes toast-in {
+  from { transform: translateY(8px) scale(0.96); opacity: 0; }
+  to   { transform: translateY(0) scale(1); opacity: 1; }
+}
+@keyframes toast-progress {
+  from { width: 100%; }
+  to   { width: 0%; }
+}
+
+/* —— action row staggered fade-up —— */
+@keyframes row-rise {
+  0%   { opacity: 0; transform: translateY(4px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+.row-rise {
+  animation: row-rise 320ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* —— refined hover/press states for buttons —— */
+.btn-press {
+  transition: transform 140ms ease, background-color 140ms ease, color 140ms ease;
+}
+.btn-press:active {
+  transform: scale(0.96);
+}
+
+/* —— circular badge —— */
+.count-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  font-family: var(--font-mono);
+  letter-spacing: 0.02em;
+}
+
+/* utility: truncate w/ tooltip-friendly */
+.line-clamp-2 {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.line-clamp-3 {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}

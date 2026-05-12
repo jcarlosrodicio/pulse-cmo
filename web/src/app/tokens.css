@@ -1,0 +1,180 @@
+/*
+ * Design tokens — single source of truth for color, type, motion, scale.
+ *
+ * Edit this file to change the palette. Components should NEVER hardcode
+ * hex/rgba values; they should reference `var(--token-name)` instead.
+ *
+ * Themes:
+ *   :root, [data-theme="dark"]  — operator console (default)
+ *   [data-theme="light"]        — instrument panel (warm off-white)
+ */
+
+:root,
+:root[data-theme="dark"] {
+  /* — surfaces —————————————————————————————— */
+  --bg:           #0a0a0b;
+  --surface:      #111114;
+  --elevated:     #17171c;
+  --panel:        #131318;
+
+  /* — borders & lines ——————————————————————— */
+  --border:        rgba(255, 255, 255, 0.07);
+  --border-strong: rgba(255, 255, 255, 0.12);
+  --hairline:      rgba(255, 255, 255, 0.04);
+
+  /* — text scale ————————————————————————————— */
+  --fg:           #ebebed;
+  --fg-dim:       #b8b8be;
+  --muted:        #6b6b74;
+  --muted-strong: #8a8a92;
+
+  /* — primary accent: warm amber-gold ———————— */
+  --accent:       #f0b429;
+  --accent-fg:    #1a1206;      /* contrast on accent fills */
+  --accent-soft:  rgba(240, 180, 41, 0.14);
+  --accent-strong:rgba(240, 180, 41, 0.34);
+  --accent-glow:  rgba(240, 180, 41, 0.45);
+
+  /* — semantic tokens ——————————————————————— */
+  --warn:         #fb7d2c;
+  --warn-soft:    rgba(251, 125, 44, 0.14);
+  --warn-fg:      #ffe4cc;
+
+  --danger:       #f43f5e;
+  --danger-soft:  rgba(244, 63, 94, 0.14);
+  --danger-fg:    #ffd9df;
+
+  --info:         #67e8f9;
+  --info-soft:    rgba(103, 232, 249, 0.12);
+  --info-fg:      #d1f5fb;
+
+  /* — channel categorical (theme-stable) ———— */
+  --ch-seo:       #67e8f9;
+  --ch-seo-bg:    rgba(56, 189, 248, 0.14);
+  --ch-tweet:     #e8e8ee;
+  --ch-tweet-bg:  rgba(255, 255, 255, 0.10);
+  --ch-hn:        #ff8a3d;
+  --ch-hn-bg:     rgba(255, 102, 0, 0.16);
+  --ch-reddit:    #ff7849;
+  --ch-reddit-bg: rgba(255, 69, 0, 0.16);
+  --ch-linkedin:  #7dd3fc;
+  --ch-linkedin-bg: rgba(14, 118, 168, 0.18);
+  --ch-article:   #d4a574;       /* wheat / parchment */
+  --ch-article-bg: rgba(212, 165, 116, 0.12);
+  --ch-gap:       #e879f9;
+  --ch-gap-bg:    rgba(217, 70, 239, 0.14);
+  --ch-strategy:  #fb7185;
+  --ch-strategy-bg: rgba(244, 63, 94, 0.12);
+
+  /* — terminal —————————————————————————————— */
+  --term-bg:      #0e0e11;
+  --term-thought: #888892;
+  --term-result:  #8aa3ff;
+  --term-text:    #d8d8de;
+  --term-meta:    #595962;
+
+  /* — surfaces extras ——————————————————————— */
+  --shimmer-from: rgba(255, 255, 255, 0.04);
+  --shimmer-mid:  rgba(255, 255, 255, 0.10);
+
+  /* — selection ————————————————————————————— */
+  --selection-bg: rgba(240, 180, 41, 0.34);
+  --selection-fg: #1a1206;
+
+  /* — type ——————————————————————————————————— */
+  --font-sans: var(--font-sans-loaded), -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-mono: var(--font-mono-loaded), ui-monospace, "SF Mono", Menlo, monospace;
+}
+
+:root[data-theme="light"] {
+  /* — surfaces (warm off-white instrument panel) ———— */
+  --bg:           #faf8f3;
+  --surface:      #ffffff;
+  --elevated:     #f3efe5;
+  --panel:        #f7f3e9;
+
+  /* — borders (warm, slightly visible) —————————————— */
+  --border:        rgba(60, 50, 30, 0.10);
+  --border-strong: rgba(60, 50, 30, 0.20);
+  --hairline:      rgba(60, 50, 30, 0.05);
+
+  /* — text scale ————————————————————————————————— */
+  --fg:           #1a1612;
+  --fg-dim:       #443e35;
+  --muted:        #7a7268;
+  --muted-strong: #54493d;
+
+  /* — primary accent: richer golden-brown ———————————— */
+  --accent:       #a16207;     /* refined golden-brown */
+  --accent-fg:    #ffffff;
+  --accent-soft:  rgba(161, 98, 7, 0.12);
+  --accent-strong:rgba(161, 98, 7, 0.30);
+  --accent-glow:  rgba(161, 98, 7, 0.32);
+
+  /* — semantic tokens (darker for contrast on light) — */
+  --warn:         #c2410c;
+  --warn-soft:    rgba(194, 65, 12, 0.12);
+  --warn-fg:      #ffffff;
+
+  --danger:       #be123c;
+  --danger-soft:  rgba(190, 18, 60, 0.12);
+  --danger-fg:    #ffffff;
+
+  --info:         #0e7490;
+  --info-soft:    rgba(14, 116, 144, 0.12);
+  --info-fg:      #ffffff;
+
+  /* — channel categorical (light variants — darker) — */
+  --ch-seo:       #0369a1;
+  --ch-seo-bg:    rgba(3, 105, 161, 0.10);
+  --ch-tweet:     #1a1612;
+  --ch-tweet-bg:  rgba(26, 22, 18, 0.06);
+  --ch-hn:        #c2410c;
+  --ch-hn-bg:    rgba(194, 65, 12, 0.10);
+  --ch-reddit:    #c2410c;
+  --ch-reddit-bg: rgba(255, 69, 0, 0.10);
+  --ch-linkedin:  #075985;
+  --ch-linkedin-bg: rgba(7, 89, 133, 0.10);
+  --ch-article:   #92400e;
+  --ch-article-bg: rgba(146, 64, 14, 0.08);
+  --ch-gap:       #86198f;
+  --ch-gap-bg:    rgba(134, 25, 143, 0.10);
+  --ch-strategy:  #9f1239;
+  --ch-strategy-bg: rgba(159, 18, 57, 0.10);
+
+  /* — terminal (warm light) ——————————————————————— */
+  --term-bg:      #efeadc;
+  --term-thought: #7a7268;
+  --term-result:  #1e3a8a;
+  --term-text:    #1a1612;
+  --term-meta:    #a09988;
+
+  /* — shimmer ——————————————————————————————————— */
+  --shimmer-from: rgba(60, 50, 30, 0.05);
+  --shimmer-mid:  rgba(60, 50, 30, 0.12);
+
+  /* — selection ——————————————————————————————————— */
+  --selection-bg: rgba(161, 98, 7, 0.30);
+  --selection-fg: #1a1612;
+}
+
+/* Tailwind 4: surface these to utility classes (bg-bg, bg-surface, etc.) */
+@theme inline {
+  --color-bg:           var(--bg);
+  --color-surface:      var(--surface);
+  --color-panel:        var(--panel);
+  --color-elevated:     var(--elevated);
+  --color-fg:           var(--fg);
+  --color-fg-dim:       var(--fg-dim);
+  --color-muted:        var(--muted);
+  --color-muted-strong: var(--muted-strong);
+  --color-accent:       var(--accent);
+  --color-border:       var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-warn:         var(--warn);
+  --color-danger:       var(--danger);
+  --color-info:         var(--info);
+
+  --font-sans: var(--font-sans);
+  --font-mono: var(--font-mono);
+}
