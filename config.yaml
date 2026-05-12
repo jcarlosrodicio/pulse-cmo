@@ -1,0 +1,52 @@
+server_host: 127.0.0.1
+server_port: 8787
+
+data_dir: ~/.pulse
+
+llm:
+  default_temperature: 0.6
+  # Pricing is approximate USD per million tokens. Edit to match the bill.
+  # Set both to 0.0 to disable cost tracking for that provider.
+  providers:
+    - name: minimax-2.5
+      base_url: https://api.openadapter.in/v1
+      api_key_env: OPENADAPTER_API_KEY
+      model: MiniMax-M2.5
+      timeout: 120
+      max_retries: 1
+      prompt_cost_per_million: 0.30
+      completion_cost_per_million: 1.20
+
+    - name: glm-5.1
+      base_url: https://api.openadapter.in/v1
+      api_key_env: OPENADAPTER_API_KEY
+      model: 0G-GLM-5.1
+      timeout: 120
+      max_retries: 1
+      prompt_cost_per_million: 0.30
+      completion_cost_per_million: 1.20
+
+    - name: glm-5
+      base_url: https://api.openadapter.in/v1
+      api_key_env: OPENADAPTER_API_KEY
+      model: 0G-GLM-5
+      timeout: 120
+      max_retries: 1
+      prompt_cost_per_million: 0.20
+      completion_cost_per_million: 0.80
+
+web:
+  base_url: https://api.openadapter.in
+  api_key_env: OPENADAPTER_API_KEY
+  timeout: 30.0
+
+seo:
+  pagespeed_api_key_env: PAGESPEED_API_KEY
+
+scheduler:
+  enabled: true
+  daily_hour: 6
+  daily_minute: 0
+
+agent:
+  max_iterations: 28

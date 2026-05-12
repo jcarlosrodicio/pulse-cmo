@@ -1,0 +1,25 @@
+# python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+
+# env / secrets
+.env
+.env.local
+
+# local data
+data/
+*.db
+~/.pulse/
+
+# node / next
+node_modules/
+.next/
+*.tsbuildinfo
+
+# os
+.DS_Store
+Thumbs.db
+
