@@ -1,9 +1,8 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ChevronDown,
-  RefreshCw,
   Inbox,
   CheckCircle2,
   X,
@@ -12,10 +11,16 @@ import {
   Trash2,
   Copy,
   Search,
+  ExternalLink,
+  Plus,
+  Sparkles,
+  Loader2,
+  ChevronsDownUp,
+  ChevronsUpDown,
 } from "lucide-react";
-import type { Action, ActionType } from "@/lib/api";
+import type { Action, ActionType, TargetKind } from "@/lib/api";
 import { stripReasoning } from "@/lib/text";
-import { ACTION_GROUPS, groupLabelFor, metaFor } from "@/lib/actionTypes";
+import { ACTION_GROUPS, groupLabelFor, metaFor, targetForGroup, topicPromptFor } from "@/lib/actionTypes";
 import { useToast } from "../ui/Toast";
 import { Badge } from "../ui/Badge";
 import { ChannelIcon } from "../ui/ChannelIcon";
@@ -30,29 +35,49 @@ export function ActionsFeed({
   onRefresh,
   onOpenInstructions,
   onStatusChange,
+  onGenerate,
+  generatingTarget,
   isInitialDive = false,
   lastRunAt,
   nextRunAt,
   runStatus,
-  lastRunCostUsd,
-  lastRunTokens,
 }: {
   actions: Action[];
   onSelect: (a: Action) => void;
   onRefresh: () => void;
   onOpenInstructions: () => void;
   onStatusChange?: (a: Action, status: Action["status"]) => void;
+  onGenerate?: (target: TargetKind, topic: string) => void;
+  generatingTarget?: TargetKind | null;
   isInitialDive?: boolean;
   lastRunAt?: string | null;
   nextRunAt?: string | null;
   runStatus?: "idle" | "running" | "done";
-  lastRunCostUsd?: number | null;
-  lastRunTokens?: number | null;
 }) {
   const [filter, setFilter] = useState<Filter>("pending");
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [query, setQuery] = useState("");
   const [showSearch, setShowSearch] = useState(false);
+
+  const allCollapsed = useMemo(() => {
+    const visibleGroupIds = ACTION_GROUPS
+      .filter((g) => actions.some((a) => g.types.includes(a.action_type)))
+      .map((g) => g.id);
+    return visibleGroupIds.length > 0 && visibleGroupIds.every((id) => collapsed[id]);
+  }, [actions, collapsed]);
+
+  const toggleAllGroups = () => {
+    const visibleGroupIds = ACTION_GROUPS
+      .filter((g) => actions.some((a) => g.types.includes(a.action_type)))
+      .map((g) => g.id);
+    if (allCollapsed) {
+      setCollapsed({});
+    } else {
+      const next: Record<string, boolean> = {};
+      for (const id of visibleGroupIds) next[id] = true;
+      setCollapsed(next);
+    }
+  };
 
   const searched = useMemo(() => {
     if (!query.trim()) return actions;
@@ -116,11 +141,12 @@ export function ActionsFeed({
             <SlidersHorizontal size={13} />
           </button>
           <button
-            onClick={onRefresh}
+            onClick={toggleAllGroups}
             className="p-1.5 rounded btn-press hover:bg-white/5 text-muted-strong"
-            aria-label="refresh"
+            aria-label={allCollapsed ? "expand all groups" : "collapse all groups"}
+            title={allCollapsed ? "expand all" : "collapse all"}
           >
-            <RefreshCw size={13} />
+            {allCollapsed ? <ChevronsUpDown size={13} /> : <ChevronsDownUp size={13} />}
           </button>
         </div>
 
@@ -129,8 +155,6 @@ export function ActionsFeed({
           lastRunAt={lastRunAt}
           nextRunAt={nextRunAt}
           runStatus={runStatus}
-          lastRunCostUsd={lastRunCostUsd}
-          lastRunTokens={lastRunTokens}
         />
 
         {showSearch && (
@@ -159,6 +183,7 @@ export function ActionsFeed({
           ACTION_GROUPS.map((g) => {
             const groupActions = filtered.filter((a) => g.types.includes(a.action_type));
             if (groupActions.length === 0) return null;
+            const target = targetForGroup(g.types);
             return (
               <ActionGroup
                 key={g.id}
@@ -169,6 +194,9 @@ export function ActionsFeed({
                 onToggle={() => setCollapsed((c) => ({ ...c, [g.id]: !c[g.id] }))}
                 onSelect={onSelect}
                 onStatusChange={onStatusChange}
+                onGenerate={target && onGenerate ? (topic) => onGenerate(target, topic) : undefined}
+                target={target}
+                isGenerating={!!target && generatingTarget === target}
               />
             );
           })
@@ -183,15 +211,11 @@ function StatsStrip({
   lastRunAt,
   nextRunAt,
   runStatus,
-  lastRunCostUsd,
-  lastRunTokens,
 }: {
   counts: Record<string, number>;
   lastRunAt?: string | null;
   nextRunAt?: string | null;
   runStatus?: "idle" | "running" | "done";
-  lastRunCostUsd?: number | null;
-  lastRunTokens?: number | null;
 }) {
   const last = lastRunAt ? relTime(new Date(lastRunAt)) : null;
   const next = nextRunAt ? relTime(new Date(nextRunAt), { future: true }) : null;
@@ -207,22 +231,11 @@ function StatsStrip({
       ) : last ? (
         <span>last run {last}</span>
       ) : null}
-      {typeof lastRunCostUsd === "number" && lastRunCostUsd > 0 && (
-        <span title={`${(lastRunTokens || 0).toLocaleString()} tokens`}>
-          · {formatCostShort(lastRunCostUsd)}
-        </span>
-      )}
       {next && runStatus !== "running" && (
         <span className="text-muted">next {next}</span>
       )}
     </div>
   );
-}
-
-function formatCostShort(usd: number): string {
-  if (usd < 0.01) return `${(usd * 100).toFixed(2)}¢`;
-  if (usd < 1) return `$${usd.toFixed(3)}`;
-  return `$${usd.toFixed(2)}`;
 }
 
 function Stat({
@@ -302,6 +315,9 @@ function ActionGroup({
   onToggle,
   onSelect,
   onStatusChange,
+  onGenerate,
+  target,
+  isGenerating,
 }: {
   groupId: string;
   types: ActionType[];
@@ -310,7 +326,13 @@ function ActionGroup({
   onToggle: () => void;
   onSelect: (a: Action) => void;
   onStatusChange?: (a: Action, status: Action["status"]) => void;
+  onGenerate?: (topic: string) => void;
+  target?: TargetKind | null;
+  isGenerating?: boolean;
 }) {
+  const [showInput, setShowInput] = useState(false);
+  const [topic, setTopic] = useState("");
+  const inputRef = useRef<HTMLInputElement>(null);
   const hasNew = actions.some(
     (a) =>
       a.status === "pending" &&
@@ -319,31 +341,111 @@ function ActionGroup({
   const groupLabel = groupLabelFor(types);
   void groupId;
 
+  useEffect(() => {
+    if (showInput) inputRef.current?.focus();
+  }, [showInput]);
+
+  // close + reset when a generation completes
+  useEffect(() => {
+    if (!isGenerating && showInput && topic === "") {
+      // user submitted (topic was cleared); keep panel collapsed
+    }
+  }, [isGenerating, showInput, topic]);
+
+  const submit = () => {
+    if (!onGenerate) return;
+    onGenerate(topic.trim());
+    setShowInput(false);
+    setTopic("");
+  };
+
   return (
     <div
       className="rounded-xl border bg-surface overflow-hidden"
       style={{ borderColor: "var(--border)" }}
     >
-      <button
-        onClick={onToggle}
-        className="w-full flex items-center gap-2.5 px-3 py-2.5 hover:bg-white/3 transition-colors btn-press"
-      >
-        <ChannelIcon kind={types[0]} size={22} />
-        <div className="flex-1 min-w-0 text-left">
-          <div className="text-[12px] uppercase tracking-[0.12em] text-muted font-medium">
-            {groupLabel}
+      <div className="flex items-stretch">
+        <button
+          onClick={onToggle}
+          className="flex-1 flex items-center gap-2.5 px-3 py-2.5 hover:bg-white/3 transition-colors btn-press"
+        >
+          <ChannelIcon kind={types[0]} size={22} />
+          <div className="flex-1 min-w-0 text-left">
+            <div className="text-[12px] uppercase tracking-[0.12em] text-muted font-medium">
+              {groupLabel}
+            </div>
+            <div className="text-[12.5px] text-fg">
+              {actions.length} item{actions.length === 1 ? "" : "s"} ready
+            </div>
           </div>
-          <div className="text-[12.5px] text-fg">
-            {actions.length} item{actions.length === 1 ? "" : "s"} ready
-          </div>
+          {hasNew && <Badge tone="accent">New</Badge>}
+          <ChevronDown
+            size={14}
+            className="text-muted transition-transform"
+            style={{ transform: collapsed ? "rotate(-90deg)" : "rotate(0deg)" }}
+          />
+        </button>
+        {onGenerate && target && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              setShowInput((v) => !v);
+            }}
+            disabled={isGenerating}
+            className="px-2.5 flex items-center gap-1 hover:bg-white/4 transition-colors text-[11.5px] font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+            style={{
+              borderLeft: "1px solid var(--border)",
+              color: "var(--accent)",
+            }}
+            title={isGenerating ? "generating…" : `generate one ${groupLabel}`}
+            aria-label={`generate ${groupLabel}`}
+          >
+            {isGenerating ? (
+              <Loader2 size={11} className="animate-spin" />
+            ) : showInput ? (
+              <X size={12} />
+            ) : (
+              <Plus size={12} />
+            )}
+          </button>
+        )}
+      </div>
+
+      {showInput && onGenerate && target && (
+        <div
+          className="p-2.5 flex items-center gap-2"
+          style={{ borderTop: "1px solid var(--border)", background: "var(--elevated)" }}
+        >
+          <Sparkles size={11} className="text-accent shrink-0" />
+          <input
+            ref={inputRef}
+            type="text"
+            value={topic}
+            onChange={(e) => setTopic(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") submit();
+              if (e.key === "Escape") {
+                setShowInput(false);
+                setTopic("");
+              }
+            }}
+            placeholder={topicPromptFor(target)}
+            className="flex-1 bg-transparent border-0 outline-none text-[12.5px] placeholder:text-muted"
+          />
+          <button
+            onClick={submit}
+            disabled={isGenerating}
+            className="px-2.5 py-1 rounded text-[11.5px] font-medium btn-press disabled:opacity-50"
+            style={{
+              background: "var(--accent-soft)",
+              color: "var(--accent)",
+              border: "1px solid var(--accent-strong)",
+            }}
+          >
+            Generate
+          </button>
         </div>
-        {hasNew && <Badge tone="accent">New</Badge>}
-        <ChevronDown
-          size={14}
-          className="text-muted transition-transform"
-          style={{ transform: collapsed ? "rotate(-90deg)" : "rotate(0deg)" }}
-        />
-      </button>
+      )}
 
       {!collapsed && (
         <ul style={{ borderTop: "1px solid var(--border)" }}>
@@ -374,7 +476,13 @@ function ActionRow({
   onStatusChange?: (a: Action, status: Action["status"]) => void;
 }) {
   const toast = useToast();
-  const severity = (action.context as { severity?: string })?.severity;
+  const ctx = action.context as {
+    severity?: string;
+    hn_url?: string;
+    post_url?: string;
+  };
+  const severity = ctx?.severity;
+  const linkUrl = ctx?.hn_url || ctx?.post_url;
   const meta = metaFor(action.action_type);
   const preview = stripReasoning(action.content)
     .replace(/[\n\r]+/g, " ")
@@ -454,6 +562,19 @@ function ActionRow({
             className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity bg-surface rounded-md px-1 py-0.5"
             style={{ borderColor: "var(--border)" }}
           >
+            {linkUrl && (
+              <a
+                href={linkUrl}
+                target="_blank"
+                rel="noreferrer"
+                onClick={(e) => e.stopPropagation()}
+                className="p-1 rounded hover:bg-white/8 btn-press text-fg-dim"
+                title={ctx?.hn_url ? "open HN thread" : "open Reddit post"}
+                aria-label="open source link"
+              >
+                <ExternalLink size={11} />
+              </a>
+            )}
             <QuickAction
               icon={<Copy size={11} />}
               label="copy content"

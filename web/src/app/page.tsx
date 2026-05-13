@@ -8,6 +8,7 @@ import {
   type AgentEvent,
   type DocumentKind,
   type Project,
+  type TargetKind,
   type WritingInstructions,
 } from "@/lib/api";
 import { DocumentSheet } from "@/components/company/DocumentSheet";
@@ -21,6 +22,7 @@ import { ActionsFeed } from "@/components/actions/ActionsFeed";
 import { ActionDetailSheet } from "@/components/actions/ActionDetailSheet";
 import { ChatPanel } from "@/components/chat/ChatPanel";
 import { WritingInstructionsModal } from "@/components/settings/WritingInstructions";
+import { SettingsSheet } from "@/components/settings/SettingsSheet";
 import { KeyboardShortcuts } from "@/components/ui/KeyboardShortcuts";
 import { useToast } from "@/components/ui/Toast";
 import { useRunStream } from "@/hooks/useRunStream";
@@ -177,7 +179,9 @@ function Dashboard({
       localStorage.setItem("pulse:terminalState", terminalState);
   }, [terminalState]);
   const [showWritingModal, setShowWritingModal] = useState(false);
+  const [showProviderSettings, setShowProviderSettings] = useState(false);
   const [showShortcuts, setShowShortcuts] = useState(false);
+  const [generatingTarget, setGeneratingTarget] = useState<TargetKind | null>(null);
   const [mobilePane, setMobilePane] = useState<"company" | "analytics" | "actions" | "chat">("actions");
   const toast = useToast();
   const knownActionIdsRef = useRef<Set<number>>(new Set());
@@ -254,7 +258,12 @@ function Dashboard({
     return () => clearInterval(id);
   }, [project.active_run_id, refreshActions, refreshActiveProject]);
 
-  const hasFirstDive = runs.some((r) => r.kind === "first_dive" && r.status === "done");
+  // "First dive" is considered done once any first_dive run has reached a
+  // terminal state (done OR failed). A failed first dive shouldn't trap the
+  // CTA forever — the user can always re-run it via "Run now".
+  const hasFirstDive = runs.some(
+    (r) => r.kind === "first_dive" && r.status !== "running",
+  );
   const runStatus: "idle" | "running" | "done" = isStreaming ? "running" : hasFirstDive ? "done" : "idle";
   // a first dive is "initial" when there's no completed dive yet (whether it's
   // running right now or hasn't been kicked off yet, the panels are empty so
@@ -323,8 +332,37 @@ function Dashboard({
     logConsole("result", "✓ writing instructions saved");
   };
 
+  // when isStreaming flips back to false, clear the generating flag.
+  useEffect(() => {
+    if (!isStreaming) setGeneratingTarget(null);
+  }, [isStreaming]);
+
+  const handleGenerate = useCallback(
+    async (target: TargetKind, topic: string) => {
+      setGeneratingTarget(target);
+      const niceLabel = target.replace(/_/g, " ");
+      logConsole("tool", `Pulse is generating ${niceLabel}${topic ? ` — ${topic}` : ""}…`);
+      toast.push({
+        kind: "info",
+        title: `Generating ${niceLabel}`,
+        detail: topic || "running focused pipeline",
+      });
+      try {
+        await start("targeted", { target, topic });
+      } catch (e) {
+        setGeneratingTarget(null);
+        toast.push({
+          kind: "error",
+          title: "Couldn't start run",
+          detail: String((e as Error).message),
+        });
+      }
+    },
+    [start, toast, logConsole],
+  );
+
   const saveProjectFromSidebar = async (patch: Partial<Project>) => {
-    logConsole("tool", "AI CMO is saving your company info…");
+    logConsole("tool", "Pulse is saving your company info…");
     await api.updateProject(project.id, patch);
     await refreshActiveProject();
     logConsole("result", "✓ Your company has been updated!");
@@ -334,6 +372,10 @@ function Dashboard({
       detail: "Your project details have been updated.",
     });
   };
+
+  const lastDoneRun = runs.find((r) => r.status === "done");
+  const lastRunCostUsd = lastDoneRun?.cost_usd ?? null;
+  const lastRunTokens = lastDoneRun?.total_tokens ?? null;
 
   const header = useMemo(
     () => (
@@ -348,12 +390,23 @@ function Dashboard({
         setTerminalState={setTerminalState}
         hasFirstDive={hasFirstDive}
         onRun={() => start(hasFirstDive ? "daily" : "first_dive")}
-        onOpenSettings={() => setShowWritingModal(true)}
+        onRedoFirstDive={() => {
+          logConsole("meta", "redoing first dive — full re-scan");
+          toast.push({
+            kind: "info",
+            title: "Redoing first dive",
+            detail: "Pulse is re-running the full deep scan.",
+          });
+          start("first_dive");
+        }}
+        onOpenProviderSettings={() => setShowProviderSettings(true)}
         onToggleMobileNav={() => setMobilePane("company")}
         runStatus={runStatus}
+        lastRunCostUsd={lastRunCostUsd}
+        lastRunTokens={lastRunTokens}
       />
     ),
-    [project, projects, onSwitchProject, onAddNewProject, isStreaming, events, syntheticLog, terminalState, hasFirstDive, start, runStatus],
+    [project, projects, onSwitchProject, onAddNewProject, isStreaming, events, syntheticLog, terminalState, hasFirstDive, start, runStatus, lastRunCostUsd, lastRunTokens],
   );
 
   return (
@@ -375,24 +428,19 @@ function Dashboard({
         }
         analytics={<AnalyticsPanel project={project} isInitialDive={isInitialDive} />}
         actions={
-          (() => {
-            const lastDone = runs.find((r) => r.status === "done");
-            return (
-              <ActionsFeed
-                actions={actions}
-                onSelect={setSelectedAction}
-                onRefresh={refreshActions}
-                onOpenInstructions={() => setShowWritingModal(true)}
-                onStatusChange={setActionStatus}
-                isInitialDive={isInitialDive}
-                lastRunAt={lastDone?.finished_at ?? null}
-                nextRunAt={nextRunIso(project, runs)}
-                runStatus={runStatus}
-                lastRunCostUsd={lastDone?.cost_usd ?? null}
-                lastRunTokens={lastDone?.total_tokens ?? null}
-              />
-            );
-          })()
+          <ActionsFeed
+            actions={actions}
+            onSelect={setSelectedAction}
+            onRefresh={refreshActions}
+            onOpenInstructions={() => setShowWritingModal(true)}
+            onStatusChange={setActionStatus}
+            onGenerate={handleGenerate}
+            generatingTarget={generatingTarget}
+            isInitialDive={isInitialDive}
+            lastRunAt={lastDoneRun?.finished_at ?? null}
+            nextRunAt={nextRunIso(project, runs)}
+            runStatus={runStatus}
+          />
         }
         chat={<ChatPanel projectId={project.id} />}
         mobilePane={mobilePane}
@@ -418,6 +466,11 @@ function Dashboard({
         onClose={() => setShowWritingModal(false)}
         project={project}
         onSave={saveWritingInstructions}
+      />
+
+      <SettingsSheet
+        open={showProviderSettings}
+        onClose={() => setShowProviderSettings(false)}
       />
 
       <KeyboardShortcuts open={showShortcuts} onClose={() => setShowShortcuts(false)} />

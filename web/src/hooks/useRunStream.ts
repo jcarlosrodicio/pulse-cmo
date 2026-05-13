@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, type AgentEvent, type RunSummary } from "@/lib/api";
+import { api, type AgentEvent, type RunSummary, type TargetKind } from "@/lib/api";
 
 export function useRunStream(projectId: number) {
   const [runs, setRuns] = useState<RunSummary[]>([]);
@@ -115,8 +115,14 @@ export function useRunStream(projectId: number) {
   );
 
   const start = useCallback(
-    async (kind: "first_dive" | "daily" | "manual" = "daily") => {
-      const r = await api.startRun(projectId, kind);
+    async (
+      kind: "first_dive" | "daily" | "manual" | "targeted" = "daily",
+      extra?: { target?: TargetKind; topic?: string; instruction?: string },
+    ) => {
+      const r = await api.startRun(projectId, kind, extra?.instruction ?? "", {
+        target: extra?.target,
+        topic: extra?.topic,
+      });
       await refreshRuns();
       setActiveRunId(r.run_id);
     },

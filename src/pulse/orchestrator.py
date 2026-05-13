@@ -22,7 +22,7 @@ from .tools.crawl import make_crawl_tools
 from .tools.discovery import make_discovery_tools
 from .tools.documents import make_document_tools
 from .tools.drafting import make_drafting_tools
-from .tools.reddit import find_reddit_opportunities, make_reddit_tools
+from .tools.reddit import make_reddit_tools
 from .tools.seo import make_seo_tools
 from .tools.strategy import make_strategy_tools
 from .tools.web import make_web_tools
@@ -56,19 +56,29 @@ core value.
    `log_seo_fix`. Skip low unless fewer than 3 total.
 
 6. DRAFT STARTER CONTENT (do not skip):
-   - `draft_tweet`: introduce the product
-   - `draft_article` (length=800): top-of-funnel topic relevant to the audience
+   - `draft_tweet`: introduce the product. one tweet. specific.
+   - BEFORE drafting the article: call `news_search` and/or `web_search` for
+     the topic + product category to find 3-5 recent items (with dates and
+     source names). Then call `draft_article` (length=800) and PASS those
+     findings as `current_context` so the article references real, recent
+     stories instead of sounding generic.
 
 7. GENERATE marketing strategy with `generate_marketing_strategy(timeframe_days=30)`.
 
 8. FIND HN opportunities — ONE call to `find_hn_opportunities` with 3-5 product
    keywords. Then `log_hn_opportunity` on the 1-2 most relevant threads.
 
-9. FIND REDDIT opportunities — ONE call to `find_reddit_opportunities` with
-   3-5 product keywords (and subreddits if obvious — r/SideProject is common).
-   Pick 1 thread that's an actual question your product answers and DRAFT a
-   reply with `draft_reddit_reply` (paste post body in full). Log 1 other with
-   `log_reddit_opportunity`. STOP after this. Do not search Reddit twice.
+9. FIND REDDIT opportunities — ONE call to `find_reddit_opportunities`
+   with NO arguments. The returned items include `suggested_angle`,
+   `mention_product`, `llm_reason` (the "why relevant"), `final_score`.
+   Pick the TOP 1-2 items. For each, call `draft_reddit_reply` with:
+     - post_url, post_title, post_body (paste in full), subreddit
+     - product_angle  = the item's `suggested_angle`
+     - why_relevant   = the item's `llm_reason`
+     - mention_product = the item's `mention_product` (true or false)
+   The tool produces 3 reply variants automatically. Do NOT call
+   `log_reddit_opportunity` — `draft_reddit_reply` handles both cases.
+   STOP after this. Never search Reddit twice.
 
 10. (Optional, if iterations remain) `web_search` for top 2 competitors, then
     `analyze_competitor` on each, then call `generate_competitor_analysis`
@@ -96,18 +106,24 @@ EXECUTE:
    For each genuinely relevant thread, log it with `log_hn_opportunity`.
    Cap at 2.
 
-2. SEARCH Reddit with `find_reddit_opportunities`. If one of the threads
-   is a clear question your product answers, DRAFT a reply with
-   `draft_reddit_reply` (paste the post body in full). Otherwise log it
-   with `log_reddit_opportunity` so the user can reply in their own voice.
-   Cap at 2 Reddit actions.
+2. SEARCH Reddit with `find_reddit_opportunities` (call with NO arguments).
+   For the top 1-2 items, call `draft_reddit_reply` passing:
+     - post_url, post_title, post_body, subreddit (from the item)
+     - product_angle  = item's `suggested_angle`
+     - why_relevant   = item's `llm_reason`
+     - mention_product = item's `mention_product` (true/false)
+   The tool always produces 3 reply variants — handle both
+   "mention product" and "no mention" cases. Do not use
+   `log_reddit_opportunity`. Cap at 2 Reddit actions.
 
-3. CHOOSE one quick content piece and draft it:
-   - a `draft_tweet` on a topical angle (look at recent news via
-     `news_search` if needed to find one), OR
-   - a `draft_linkedin_post`, OR
-   - a `draft_hn_post` (rare — only if there's a launch-worthy update).
-   Pick what fits today best. Don't draft all three.
+3. CHOOSE one quick content piece. ALWAYS check `news_search` first for a
+   timely angle in the product's category (today + last 48h). Then draft:
+   - `draft_tweet` on the news hook, OR
+   - `draft_linkedin_post`, OR
+   - `draft_article` (if there's a clear, fresh story worth a 600-900 word
+     piece, pass the news findings as `current_context`), OR
+   - `draft_hn_post` (rare — only if there's a launch-worthy update).
+   Pick what fits today best. Don't draft all of them.
 
 4. RE-AUDIT SEO on the homepage with `audit_seo` — if there are new high
    or medium findings (compared to past runs), log them with `log_seo_fix`.
@@ -151,10 +167,7 @@ def build_registry_for_run(
         registry.add(t)
     for t in make_document_tools(llm=llm, store=store, project_id=project_id):
         registry.add(t)
-    registry.add(find_reddit_opportunities)
     for t in make_reddit_tools(llm=llm, store=store, project_id=project_id, run_id=run_id):
-        if t.name == "find_reddit_opportunities":
-            continue  # already added above as a free function
         registry.add(t)
     return registry
 
@@ -252,4 +265,185 @@ async def run_manual(
         max_iterations=config.agent.max_iterations,
     )
     async for ev in agent.stream([{"role": "user", "content": instruction}]):
+        yield ev
+
+
+# ---------------------------------------------------------------------------
+# Targeted runs — generate ONE action of a specific kind, fast.
+# ---------------------------------------------------------------------------
+
+# Per-target playbook. Each entry produces a focused system prompt + max iter
+# budget for that channel. The agent only runs the steps it needs; the topic
+# argument is appended verbatim into the user message.
+_TARGET_PLAYBOOK: dict[str, dict[str, Any]] = {
+    "tweet": {
+        "label": "tweet",
+        "max_iter": 4,
+        "steps": (
+            "1. (Optional, if topic mentions a current event) call `news_search`\n"
+            "   for ONE timely angle.\n"
+            "2. Call `draft_tweet` with the topic. ONE draft. Three variants will\n"
+            "   be saved automatically.\n"
+            "3. STOP. Reply with one line: 'Drafted tweet #<action_id>'."
+        ),
+    },
+    "linkedin": {
+        "label": "LinkedIn post",
+        "max_iter": 4,
+        "steps": (
+            "1. (Optional) call `news_search` for a timely hook.\n"
+            "2. Call `draft_linkedin_post` with the topic.\n"
+            "3. STOP. Reply with: 'Drafted LinkedIn post #<action_id>'."
+        ),
+    },
+    "hn_post": {
+        "label": "Hacker News post",
+        "max_iter": 4,
+        "steps": (
+            "1. Decide whether this is a `Show HN` (sharing) or `Ask HN` (asking).\n"
+            "2. Call `draft_hn_post` with the topic and angle.\n"
+            "3. STOP. Reply with: 'Drafted HN post #<action_id>'."
+        ),
+    },
+    "article": {
+        "label": "blog article",
+        "max_iter": 6,
+        "steps": (
+            "1. Call `news_search` and/or `web_search` for 3-5 recent items on\n"
+            "   the topic (with dates and sources).\n"
+            "2. Call `draft_article` with target_keywords (derive 2-3 from the\n"
+            "   topic) and pass the findings as `current_context`.\n"
+            "3. STOP. Reply with: 'Drafted article #<action_id>'."
+        ),
+    },
+    "reddit_reply": {
+        "label": "Reddit reply",
+        "max_iter": 6,
+        "steps": (
+            "1. Call `find_reddit_opportunities` with NO arguments. The 6-stage\n"
+            "   pipeline returns items with suggested_angle, llm_reason (why),\n"
+            "   and mention_product.\n"
+            "2. Pick the highest-scoring item. Call `draft_reddit_reply` with:\n"
+            "     post_url, post_title, post_body, subreddit,\n"
+            "     product_angle  = item.suggested_angle\n"
+            "     why_relevant   = item.llm_reason\n"
+            "     mention_product = item.mention_product\n"
+            "   The tool always produces 3 variants — works for both 'mention'\n"
+            "   and 'no mention' cases. Do NOT use log_reddit_opportunity.\n"
+            "3. STOP. Reply with: 'Drafted Reddit reply for r/<sub>'."
+        ),
+    },
+    "reddit_opportunity": {
+        # alias — same behavior as reddit_reply. The single Reddit action
+        # type is `reddit_reply` (the UI surfaces why/angle for both).
+        "label": "Reddit reply",
+        "max_iter": 6,
+        "steps": (
+            "1. Call `find_reddit_opportunities` with NO arguments.\n"
+            "2. For the top 1-2 items, call `draft_reddit_reply` passing\n"
+            "   product_angle = item.suggested_angle,\n"
+            "   why_relevant = item.llm_reason,\n"
+            "   mention_product = item.mention_product.\n"
+            "3. STOP."
+        ),
+    },
+    "hn_opportunity": {
+        "label": "Hacker News opportunity",
+        "max_iter": 5,
+        "steps": (
+            "1. Call `find_hn_opportunities` with 3-5 product keywords.\n"
+            "2. Pick the top 1-2 relevant threads and `log_hn_opportunity` each.\n"
+            "3. STOP."
+        ),
+    },
+    "seo_audit": {
+        "label": "SEO audit",
+        "max_iter": 8,
+        "steps": (
+            "1. Call `audit_seo` on the homepage URL.\n"
+            "2. For each HIGH and MEDIUM finding, call `log_seo_fix` with the\n"
+            "   severity, a concrete title, and clear fix instructions.\n"
+            "3. STOP."
+        ),
+    },
+    "competitor_scan": {
+        "label": "competitor scan",
+        "max_iter": 8,
+        "steps": (
+            "1. For the top 2 competitors, call `analyze_competitor` on each\n"
+            "   competitor's URL (use `web_search` if a URL isn't known).\n"
+            "2. Call `generate_competitor_analysis` to save the document.\n"
+            "3. STOP."
+        ),
+    },
+    "market_gap": {
+        "label": "market gap",
+        "max_iter": 8,
+        "steps": (
+            "1. Call `identify_market_gaps`. It will surface positioning gaps.\n"
+            "2. STOP."
+        ),
+    },
+    "strategy": {
+        "label": "marketing strategy",
+        "max_iter": 6,
+        "steps": (
+            "1. Call `generate_marketing_strategy(timeframe_days=30)`.\n"
+            "2. STOP."
+        ),
+    },
+}
+
+
+async def run_targeted(
+    *,
+    config: Config,
+    llm: LLM,
+    store: ActionStore,
+    project_id: int,
+    run_id: int,
+    target: str,
+    topic: str = "",
+    instruction: str = "",
+) -> AsyncIterator[dict[str, Any]]:
+    """Generate ONE action of a specific kind. Fast, focused, single-purpose.
+
+    Unlike `run_daily`, this doesn't span channels — it does one thing,
+    saves the action, and stops. Designed for the "+" buttons in the UI.
+    """
+    project = store.get_project(project_id)
+    if not project:
+        raise ValueError(f"project {project_id} not found")
+
+    playbook = _TARGET_PLAYBOOK.get(target)
+    if not playbook:
+        raise ValueError(f"unknown target '{target}'")
+
+    registry = build_registry_for_run(config, llm, store, project_id, run_id)
+    system = (
+        f"You are Pulse — generating ONE {playbook['label']} for this project.\n"
+        "Be ruthlessly focused. Execute the steps below exactly. Do not call\n"
+        "tools that aren't listed. Do not generate multiple artifacts. STOP\n"
+        "after the listed steps complete.\n\n"
+        f"STEPS:\n{playbook['steps']}\n\n"
+        "RULES:\n"
+        " * Use tools, don't speculate.\n"
+        " * If a step says 'Optional', skip it unless it clearly helps.\n"
+        " * Do not call the same tool twice unless explicitly told to.\n\n"
+        + _project_context(project)
+    )
+
+    topic_line = f"\nTOPIC / FOCUS: {topic}" if topic.strip() else ""
+    extra = f"\nADDITIONAL INSTRUCTION: {instruction}" if instruction.strip() else ""
+    user_content = (
+        f"Generate one {playbook['label']} for {project['url']}.{topic_line}{extra}"
+    )
+
+    agent = Agent(
+        llm=llm,
+        registry=registry,
+        system_prompt=system,
+        max_iterations=min(playbook["max_iter"], config.agent.max_iterations),
+    )
+    async for ev in agent.stream([{"role": "user", "content": user_content}]):
         yield ev

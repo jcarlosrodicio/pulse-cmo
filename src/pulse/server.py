@@ -36,7 +36,8 @@ from .config import Config
 from .chat import expand_action_detail, stream_chat_reply
 from .llm import LLM, usage_scope
 from .log import setup_logging
-from .orchestrator import run_daily, run_first_dive, run_manual
+from .orchestrator import run_daily, run_first_dive, run_manual, run_targeted
+from .settings_store import SettingsStore
 from .store import ActionStore
 
 log = structlog.get_logger()
@@ -63,8 +64,14 @@ class UpdateProject(BaseModel):
 
 
 class StartRun(BaseModel):
-    kind: str = Field(pattern="^(first_dive|daily|manual)$")
+    kind: str = Field(pattern="^(first_dive|daily|manual|targeted)$")
     instruction: str = ""
+    # For `kind="targeted"`: which channel to generate.
+    target: str | None = Field(
+        default=None,
+        pattern="^(tweet|linkedin|hn_post|article|reddit_reply|reddit_opportunity|hn_opportunity|seo_audit|competitor_scan|market_gap|strategy)$",
+    )
+    topic: str = ""
 
 
 class UpdateAction(BaseModel):
@@ -93,6 +100,28 @@ class RenameChatSession(BaseModel):
 
 class ChatMessage(BaseModel):
     content: str
+
+
+class ProviderUpsert(BaseModel):
+    name: str
+    base_url: str
+    api_key: str | None = None
+    api_key_env: str | None = None
+    model: str
+    role: str = "fallback"
+    timeout: float = 60.0
+    max_retries: int = 1
+    prompt_cost_per_million: float = 0.0
+    completion_cost_per_million: float = 0.0
+
+
+class SaveProviders(BaseModel):
+    providers: list[ProviderUpsert]
+
+
+class ProbeProvider(BaseModel):
+    base_url: str
+    api_key: str
 
 
 # --- run streaming infra ---------------------------------------------------
@@ -159,6 +188,8 @@ async def _execute_run(
     run_id: int,
     kind: str,
     instruction: str = "",
+    target: str | None = None,
+    topic: str = "",
 ) -> None:
     log.info("run_start", run_id=run_id, project_id=project_id, kind=kind)
     captured: list[dict[str, Any]] = []
@@ -173,6 +204,17 @@ async def _execute_run(
             elif kind == "daily":
                 stream = run_daily(
                     config=config, llm=llm, store=store, project_id=project_id, run_id=run_id
+                )
+            elif kind == "targeted":
+                stream = run_targeted(
+                    config=config,
+                    llm=llm,
+                    store=store,
+                    project_id=project_id,
+                    run_id=run_id,
+                    target=target or "tweet",
+                    topic=topic,
+                    instruction=instruction,
                 )
             else:
                 stream = run_manual(
@@ -231,6 +273,8 @@ def create_app(config: Config) -> FastAPI:
     setup_logging()
     db_path = config.data_path() / "pulse.db"
     store = ActionStore(db_path=db_path)
+    settings = SettingsStore(config.data_path())
+    settings.apply_to_config(config)
     llm = LLM(config)
     broker = RunBroker()
     scheduler = AsyncIOScheduler()
@@ -399,6 +443,8 @@ def create_app(config: Config) -> FastAPI:
                 run_id=run_id,
                 kind=body.kind,
                 instruction=body.instruction,
+                target=body.target,
+                topic=body.topic,
             )
         )
         return {"run_id": run_id, "stream_url": f"/runs/{run_id}/stream"}
@@ -576,6 +622,52 @@ def create_app(config: Config) -> FastAPI:
                 "X-Accel-Buffering": "no",
             },
         )
+
+    # --- settings / provider config ----------------------------------------
+
+    @app.get("/settings")
+    async def get_settings() -> dict:
+        providers = settings.list_providers(config.llm.providers)
+        # don't echo back any API keys to the client (write-only)
+        sanitized = [{**p, "api_key": "•••" if p.get("api_key") else None} for p in providers]
+        return {
+            "providers": sanitized,
+            "default_temperature": config.llm.default_temperature,
+            "max_iterations": config.agent.max_iterations,
+        }
+
+    @app.patch("/settings/providers")
+    async def save_settings_providers(body: SaveProviders) -> dict:
+        provider_dicts = [p.model_dump() for p in body.providers]
+        # If client sent "•••" for api_key, treat as unchanged — preserve the
+        # previously-stored value rather than wiping it.
+        existing = {p["name"]: p for p in settings.load().get("providers", [])}
+        for p in provider_dicts:
+            if p.get("api_key") in ("•••", None, ""):
+                p["api_key"] = existing.get(p["name"], {}).get("api_key")
+        saved = settings.save_providers(provider_dicts)
+        # hot-apply to running config
+        settings.apply_to_config(config)
+        llm._clients.clear()  # reset cached OpenAI clients
+        return {"ok": True, "providers": [
+            {**p, "api_key": "•••" if p.get("api_key") else None} for p in saved
+        ]}
+
+    @app.post("/settings/providers/probe")
+    async def probe_provider(body: ProbeProvider) -> dict:
+        return await settings.test_connection(
+            base_url=body.base_url, api_key=body.api_key
+        )
+
+    @app.post("/settings/providers/fetch-models")
+    async def fetch_models(body: ProbeProvider) -> dict:
+        try:
+            models = await settings.fetch_models(
+                base_url=body.base_url, api_key=body.api_key
+            )
+            return {"ok": True, "models": models}
+        except Exception as e:
+            return {"ok": False, "error": f"{type(e).__name__}: {e}"}
 
     return app
 

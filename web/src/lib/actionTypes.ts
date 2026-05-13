@@ -5,7 +5,7 @@
  * so they adapt across light/dark themes automatically.
  */
 
-import type { ActionType } from "./api";
+import type { ActionType, TargetKind } from "./api";
 
 export type ActionMeta = {
   // human-readable channel label (used in detail sheet titles)
@@ -153,4 +153,55 @@ export function groupLabelFor(types: ActionType[]): string {
 
 export function groupTintFor(types: ActionType[]): string {
   return metaFor(types[0]).tint;
+}
+
+/**
+ * Which targeted-run kind should fire when the user clicks "+ Generate" on
+ * a given action group. Returns null for groups that can't be generated
+ * standalone (none currently — but kept for future-proofing).
+ */
+export function targetForGroup(types: ActionType[]): TargetKind | null {
+  const first = types[0];
+  switch (first) {
+    case "tweet":
+      return "tweet";
+    case "linkedin":
+      return "linkedin";
+    case "article":
+      return "article";
+    case "hn_post":
+    case "hn_opportunity":
+      // For HN, default to "find opportunities to comment on" since that's
+      // higher value than crafting a Show HN cold. The user can override
+      // by typing "show hn:" in the topic.
+      return "hn_opportunity";
+    case "reddit_reply":
+    case "reddit_opportunity":
+      return "reddit_reply";
+    case "seo_fix":
+      return "seo_audit";
+    case "market_gap":
+      return "market_gap";
+    case "strategy":
+      return "strategy";
+    default:
+      return null;
+  }
+}
+
+/** Human-readable label for the topic prompt placeholder. */
+export function topicPromptFor(target: TargetKind): string {
+  return {
+    tweet: "what's the tweet about? (optional)",
+    linkedin: "what should the LinkedIn post cover? (optional)",
+    hn_post: "show HN or ask HN topic (optional)",
+    article: "article topic / target keyword",
+    reddit_reply: "topic or niche (optional)",
+    reddit_opportunity: "topic or niche (optional)",
+    hn_opportunity: "keywords to search HN for (optional)",
+    seo_audit: "(re-audits homepage — no topic needed)",
+    competitor_scan: "competitor URL or name (optional)",
+    market_gap: "(scans for gaps — no topic needed)",
+    strategy: "(generates a 30-day strategy — no topic needed)",
+  }[target];
 }

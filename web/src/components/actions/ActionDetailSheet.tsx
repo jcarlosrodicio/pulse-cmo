@@ -62,10 +62,12 @@ export function ActionDetailSheet({
     setEditTitle(action.title);
     setEditContent(action.content);
 
+    // Auto-expand a step-by-step guide only for action kinds where the
+    // user genuinely needs explanation (SEO fixes + market gaps). For X /
+    // Reddit / LinkedIn / articles, the variants ARE the deliverable —
+    // a guide on top is noise.
     const needsExpand =
       (action.action_type === "seo_fix" ||
-        action.action_type === "hn_opportunity" ||
-        action.action_type === "reddit_opportunity" ||
         action.action_type === "market_gap") &&
       !action.detail_md &&
       fetchedFor.current !== action.id;
@@ -83,8 +85,27 @@ export function ActionDetailSheet({
 
   if (!action) return null;
 
-  const sourceUrl = (action.context as { hn_url?: string })?.hn_url;
-  const severity = (action.context as { severity?: string })?.severity;
+  const rawCtx = action.context as {
+    hn_url?: string;
+    post_url?: string;
+    subreddit?: string;
+    severity?: string;
+    why_relevant?: string;
+    why?: string;                // legacy log_reddit_opportunity
+    product_angle?: string;
+    angle?: string;              // legacy log_reddit_opportunity / log_hn_opportunity
+    mention_product?: boolean;
+    post_title?: string;
+  };
+  // unify legacy + new key names
+  const ctx = {
+    ...rawCtx,
+    why_relevant: rawCtx.why_relevant || rawCtx.why,
+    product_angle: rawCtx.product_angle || rawCtx.angle,
+  };
+  const sourceUrl = ctx?.hn_url || ctx?.post_url;
+  const subredditTag = ctx?.subreddit ? `r/${ctx.subreddit.replace(/^r\//, "")}` : null;
+  const severity = ctx?.severity;
   const variants =
     (action.context as { variants?: string[] })?.variants || [];
   const chosenVariant =
@@ -98,11 +119,24 @@ export function ActionDetailSheet({
     action.action_type === "market_gap" ||
     action.action_type === "reddit_opportunity" ||
     action.action_type === "hn_opportunity";
-  const showDetailBlock =
-    (action.action_type === "seo_fix" ||
-      action.action_type === "hn_opportunity" ||
+  // Reddit / HN replies + opportunities: show why+angle as a meta callout
+  // above the variants, since the body should be the actual draft.
+  const showWhyAngle =
+    (ctx?.why_relevant || ctx?.product_angle) &&
+    (action.action_type === "reddit_reply" ||
       action.action_type === "reddit_opportunity" ||
-      action.action_type === "market_gap") &&
+      action.action_type === "hn_opportunity" ||
+      action.action_type === "hn_post");
+  // Legacy reddit_opportunity / hn_opportunity actions have no variants and
+  // their `content` is just a markdown re-statement of the why/angle/link.
+  // Once we surface those in the callout above, the body becomes pure noise —
+  // hide it. New runs always create reddit_reply with proper variants.
+  const isLegacyOpportunity =
+    (action.action_type === "reddit_opportunity" ||
+      action.action_type === "hn_opportunity") &&
+    variants.length === 0;
+  const showDetailBlock =
+    (action.action_type === "seo_fix" || action.action_type === "market_gap") &&
     (detail || expanding);
 
   const copy = async () => {
@@ -112,6 +146,19 @@ export function ActionDetailSheet({
       setTimeout(() => setCopied(false), 1500);
     } catch {
       // noop
+    }
+  };
+
+  const copyAndOpenPost = async () => {
+    try {
+      await navigator.clipboard.writeText(cleanContent);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // even if copy fails, still open the post
+    }
+    if (sourceUrl) {
+      window.open(sourceUrl, "_blank", "noopener,noreferrer");
     }
   };
 
@@ -155,13 +202,24 @@ export function ActionDetailSheet({
 
       <div className="flex-1 overflow-y-auto px-5 py-4">
         {/* meta */}
-        <div className="flex items-center gap-2 text-[11px] text-muted mb-3">
+        <div className="flex items-center gap-2 text-[11px] text-muted mb-3 flex-wrap">
           {severity && (
             <Badge
               tone={severity === "high" ? "danger" : severity === "medium" ? "warn" : "muted"}
             >
               {severity}
             </Badge>
+          )}
+          {subredditTag && (
+            <span
+              className="font-mono px-1.5 py-0.5 rounded text-[10.5px]"
+              style={{
+                background: "var(--ch-reddit-bg)",
+                color: "var(--ch-reddit)",
+              }}
+            >
+              {subredditTag}
+            </span>
           )}
           <span className="font-mono">
             #{action.id} ·{" "}
@@ -177,9 +235,11 @@ export function ActionDetailSheet({
               href={sourceUrl}
               target="_blank"
               rel="noreferrer"
-              className="flex items-center gap-1 text-fg-dim hover:text-fg"
+              className="flex items-center gap-1 px-1.5 py-0.5 rounded border hover:bg-white/4 text-fg-dim hover:text-fg"
+              style={{ borderColor: "var(--border-strong)" }}
+              title={sourceUrl}
             >
-              <ExternalLink size={11} /> source
+              <ExternalLink size={11} /> open {ctx?.hn_url ? "HN thread" : ctx?.post_url ? "post" : "source"}
             </a>
           )}
         </div>
@@ -195,6 +255,16 @@ export function ActionDetailSheet({
             onChange={(e) => setEditTitle(e.target.value)}
             className="w-full bg-surface border rounded p-2 mb-3 text-[18px] font-medium"
             style={{ borderColor: "var(--border-strong)" }}
+          />
+        )}
+
+        {/* Why-relevant + angle callout (Reddit / HN context) */}
+        {!editing && showWhyAngle && (
+          <WhyAngleCallout
+            postTitle={ctx?.post_title}
+            whyRelevant={ctx?.why_relevant}
+            suggestedAngle={ctx?.product_angle}
+            mentionProduct={ctx?.mention_product}
           />
         )}
 
@@ -215,7 +285,8 @@ export function ActionDetailSheet({
           />
         )}
 
-        {/* content card with copy/edit */}
+        {/* content card with copy/edit (hidden for legacy opportunities) */}
+        {!isLegacyOpportunity && (
         <div
           className="rounded-xl border bg-surface mb-4 overflow-hidden"
           style={{ borderColor: "var(--border)" }}
@@ -230,6 +301,21 @@ export function ActionDetailSheet({
             <div className="flex-1" />
             {!editing ? (
               <>
+                {sourceUrl && (
+                  <button
+                    onClick={copyAndOpenPost}
+                    className="flex items-center gap-1 px-2 py-0.5 rounded text-[11.5px] font-medium hover:opacity-90 btn-press"
+                    style={{
+                      background: "var(--accent-soft)",
+                      color: "var(--accent)",
+                      border: "1px solid var(--accent-strong)",
+                    }}
+                    title="copies the chosen variant and opens the post in a new tab"
+                  >
+                    {copied ? <Check size={11} /> : <ExternalLink size={11} />}
+                    {copied ? "Copied — go paste" : "Copy & open post"}
+                  </button>
+                )}
                 <button
                   onClick={copy}
                   className="flex items-center gap-1 px-2 py-0.5 rounded text-[11.5px] text-fg-dim hover:bg-white/5"
@@ -286,27 +372,45 @@ export function ActionDetailSheet({
             )}
           </div>
         </div>
+        )}
 
-        {/* expanded detail (SEO / HN) */}
+        {/* expanded detail (SEO / market gap only) */}
         {showDetailBlock && (
-          <div className="mb-4">
-            <div className="flex items-center gap-1.5 mb-2">
-              <Sparkles size={12} className="text-accent" />
+          <div
+            className="rounded-xl border bg-surface mb-4 overflow-hidden"
+            style={{ borderColor: "var(--border)" }}
+          >
+            <div
+              className="flex items-center gap-1.5 px-3 py-2"
+              style={{ borderBottom: "1px solid var(--border)" }}
+            >
+              <Sparkles size={11} className="text-accent" />
               <span className="text-[10.5px] uppercase tracking-[0.14em] text-muted font-medium">
                 Step-by-step guide
               </span>
+              {expanding && (
+                <span className="flex items-center gap-1 text-[10.5px] text-muted ml-auto">
+                  <Loader2 size={10} className="animate-spin" />
+                  <span className="font-mono">writing…</span>
+                </span>
+              )}
             </div>
-            {expanding ? (
-              <div className="space-y-2">
-                <div className="h-3 shimmer w-3/4" />
-                <div className="h-3 shimmer w-full" />
-                <div className="h-3 shimmer w-1/2" />
-              </div>
-            ) : cleanDetail ? (
-              <div className="prose-pulse">
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>{cleanDetail}</ReactMarkdown>
-              </div>
-            ) : null}
+            <div className="p-4">
+              {expanding ? (
+                <div className="space-y-2.5">
+                  <div className="h-3 shimmer w-3/4" />
+                  <div className="h-3 shimmer w-full" />
+                  <div className="h-3 shimmer w-11/12" />
+                  <div className="h-3 shimmer w-1/2" />
+                  <div className="h-3 shimmer w-5/6 mt-3" />
+                  <div className="h-3 shimmer w-2/3" />
+                </div>
+              ) : cleanDetail ? (
+                <div className="prose-pulse">
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{cleanDetail}</ReactMarkdown>
+                </div>
+              ) : null}
+            </div>
           </div>
         )}
 
@@ -331,12 +435,83 @@ export function ActionDetailSheet({
         )}
       </div>
 
-      {expanding && (
-        <div className="absolute top-3 right-14 flex items-center gap-1 text-[11px] text-muted">
-          <Loader2 size={11} className="animate-spin" /> generating guide…
-        </div>
-      )}
     </Sheet>
+  );
+}
+
+function WhyAngleCallout({
+  postTitle,
+  whyRelevant,
+  suggestedAngle,
+  mentionProduct,
+}: {
+  postTitle?: string;
+  whyRelevant?: string;
+  suggestedAngle?: string;
+  mentionProduct?: boolean;
+}) {
+  return (
+    <div
+      className="rounded-xl border bg-surface mb-4 overflow-hidden"
+      style={{ borderColor: "var(--border)" }}
+    >
+      <div
+        className="flex items-center gap-2 px-3 py-2"
+        style={{ borderBottom: "1px solid var(--border)" }}
+      >
+        <Sparkles size={11} className="text-accent" />
+        <span className="text-[10.5px] uppercase tracking-[0.14em] text-muted font-medium">
+          Why this thread
+        </span>
+        {mentionProduct === false && (
+          <span
+            className="ml-auto text-[10px] uppercase tracking-[0.12em] font-medium px-1.5 py-0.5 rounded font-mono"
+            style={{
+              background: "var(--elevated)",
+              color: "var(--muted-strong)",
+              border: "1px solid var(--border)",
+            }}
+            title="The verifier flagged this thread as a no-mention reply — just be helpful."
+          >
+            no product mention
+          </span>
+        )}
+        {mentionProduct === true && (
+          <span
+            className="ml-auto text-[10px] uppercase tracking-[0.12em] font-medium px-1.5 py-0.5 rounded font-mono"
+            style={{
+              background: "var(--accent-soft)",
+              color: "var(--accent)",
+              border: "1px solid var(--accent-strong)",
+            }}
+            title="The verifier thinks this thread warrants a subtle product mention."
+          >
+            mention OK
+          </span>
+        )}
+      </div>
+      <div className="px-4 py-3 space-y-2 text-[12.5px] leading-relaxed">
+        {postTitle && (
+          <div className="text-fg-dim italic line-clamp-2">&ldquo;{postTitle}&rdquo;</div>
+        )}
+        {whyRelevant && (
+          <div>
+            <span className="text-[10.5px] uppercase tracking-[0.12em] text-muted font-medium mr-1.5">
+              Why
+            </span>
+            {whyRelevant}
+          </div>
+        )}
+        {suggestedAngle && (
+          <div>
+            <span className="text-[10.5px] uppercase tracking-[0.12em] text-muted font-medium mr-1.5">
+              Angle
+            </span>
+            {suggestedAngle}
+          </div>
+        )}
+      </div>
+    </div>
   );
 }
 

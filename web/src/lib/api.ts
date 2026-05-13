@@ -83,6 +83,21 @@ export type ActionType =
   | "market_gap"
   | "strategy";
 
+// Channels you can target via a `targeted` run — used by the per-channel
+// "+ Generate" buttons in the Actions Feed.
+export type TargetKind =
+  | "tweet"
+  | "linkedin"
+  | "hn_post"
+  | "article"
+  | "reddit_reply"
+  | "reddit_opportunity"
+  | "hn_opportunity"
+  | "seo_audit"
+  | "competitor_scan"
+  | "market_gap"
+  | "strategy";
+
 export type ActionContext = Record<string, unknown> & {
   variants?: string[];
   chosen_variant?: number;
@@ -174,6 +189,27 @@ export type ChatMessageRow = {
 };
 
 export type ChatSessionDetail = ChatSession & { messages: ChatMessageRow[] };
+
+export type ProviderRole = "primary" | "secondary" | "vision" | "fallback";
+
+export type ProviderConfig = {
+  name: string;
+  base_url: string;
+  api_key: string | null;          // "•••" indicates stored-but-redacted
+  api_key_env: string | null;
+  model: string;
+  role: ProviderRole;
+  timeout: number;
+  max_retries: number;
+  prompt_cost_per_million: number;
+  completion_cost_per_million: number;
+};
+
+export type SettingsPayload = {
+  providers: ProviderConfig[];
+  default_temperature: number;
+  max_iterations: number;
+};
 
 const API = "/api";
 
@@ -270,12 +306,17 @@ export const api = {
   },
 
   // runs
-  async startRun(projectId: number, kind: "first_dive" | "daily" | "manual", instruction = "") {
+  async startRun(
+    projectId: number,
+    kind: "first_dive" | "daily" | "manual" | "targeted",
+    instruction = "",
+    extra?: { target?: TargetKind; topic?: string },
+  ) {
     return json<{ run_id: number; stream_url: string }>(
       await fetch(`${API}/projects/${projectId}/runs`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ kind, instruction }),
+        body: JSON.stringify({ kind, instruction, ...(extra ?? {}) }),
       }),
     );
   },
@@ -388,6 +429,38 @@ export const api = {
   },
   sendChatMessage(sessionId: number, content: string, onEvent: (e: AgentEvent) => void): () => void {
     return ssePost(`/chat/sessions/${sessionId}/messages`, { content }, onEvent);
+  },
+
+  // settings / providers
+  async getSettings() {
+    return json<SettingsPayload>(await fetch(`${API}/settings`));
+  },
+  async saveProviders(providers: ProviderConfig[]) {
+    return json<{ ok: boolean; providers: ProviderConfig[] }>(
+      await fetch(`${API}/settings/providers`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ providers }),
+      }),
+    );
+  },
+  async probeProvider(base_url: string, api_key: string) {
+    return json<{ ok: boolean; models?: number; sample?: string[]; error?: string }>(
+      await fetch(`${API}/settings/providers/probe`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ base_url, api_key }),
+      }),
+    );
+  },
+  async fetchModels(base_url: string, api_key: string) {
+    return json<{ ok: boolean; models?: string[]; error?: string }>(
+      await fetch(`${API}/settings/providers/fetch-models`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ base_url, api_key }),
+      }),
+    );
   },
 };
 
