@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 180 180">
+  <!-- rounded-square background (iOS auto-rounds further) -->
+  <rect width="180" height="180" rx="40" fill="#0a0a0b"/>
+  <!-- mark, centered, ~2.6x scale of the 24×24 source -->
+  <g transform="translate(28 30) scale(5.2)">
+    <ellipse cx="12" cy="12.5" rx="9.6" ry="8.8" fill="#f0b429"/>
+    <ellipse cx="9.1" cy="10.5" rx="1.05" ry="1.35" fill="#1a1206"/>
+    <ellipse cx="14.9" cy="10.5" rx="1.05" ry="1.35" fill="#1a1206"/>
+    <path
+      d="M6.5 15.4 L9.4 15.4 L10.3 13.6 L11.4 17 L12.7 12.2 L14 16 L14.7 14.4 L15.3 15.4 L17.5 15.4"
+      stroke="#1a1206"
+      stroke-width="1.6"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+      fill="none"
+    />
+  </g>
+</svg>

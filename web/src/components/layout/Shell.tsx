@@ -123,7 +123,7 @@ function MobileBottomNav({
     { id: "company", label: "Brand", icon: "○" },
     { id: "analytics", label: "Site", icon: "◉" },
     { id: "actions", label: "Actions", icon: "▣" },
-    { id: "chat", label: "CMO", icon: "✷" },
+    { id: "chat", label: "Pulse", icon: "✷" },
   ];
   return (
     <nav

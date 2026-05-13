@@ -225,7 +225,7 @@ export function TerminalBar({
 
   return (
     <div
-      className="terminal relative overflow-hidden select-none rounded-lg border"
+      className="terminal relative overflow-hidden rounded-lg border"
       style={{
         height: HEIGHT[state],
         borderColor: "var(--border-strong)",
@@ -252,7 +252,7 @@ export function TerminalBar({
         </button>
       ) : (
         <>
-          <div ref={ref} className="absolute inset-0 px-4 py-2.5 pr-9 overflow-y-auto">
+          <div ref={ref} className="term-scroll absolute inset-0 px-4 py-2.5 pr-9 overflow-y-auto">
             {lines.length === 0 ? (
               <div className="ln-meta">idle. press &quot;Run now&quot; to start a pass.</div>
             ) : (

@@ -195,7 +195,7 @@ export function ChatPanel({ projectId }: { projectId: number }) {
           <span className="text-accent">
             <PulseLogo size={14} />
           </span>
-          <h2 className="text-[13.5px] font-semibold tracking-tight">Talk to AI CMO</h2>
+          <h2 className="text-[13.5px] font-semibold tracking-tight">Talk to Pulse</h2>
           <div className="flex-1" />
           <button
             onClick={() => setShowHistory(true)}
@@ -228,6 +228,7 @@ export function ChatPanel({ projectId }: { projectId: number }) {
               <MessageBubble key={m.id} role={m.role} content={m.content} />
             ))}
             {streamingText && <MessageBubble role="assistant" content={streamingText} streaming />}
+            {busy && !streamingText && !activeTool && <TypingIndicator />}
             {activeTool && (
               <div className="flex items-center gap-2 text-[11.5px] text-muted">
                 <Loader2 size={11} className="animate-spin" />
@@ -241,6 +242,24 @@ export function ChatPanel({ projectId }: { projectId: number }) {
       {/* composer */}
       <div className="px-3 lg:px-4 pb-4 pt-2 shrink-0">
         <Composer value={input} onChange={setInput} onSubmit={send} busy={busy} />
+      </div>
+    </div>
+  );
+}
+
+function TypingIndicator() {
+  return (
+    <div className="flex items-start gap-2.5">
+      <div
+        className="w-6 h-6 rounded-md flex items-center justify-center shrink-0 mt-0.5"
+        style={{ background: "var(--accent-soft)", color: "var(--accent)" }}
+      >
+        <PulseLogo size={11} />
+      </div>
+      <div className="flex items-center gap-1.5 mt-1.5">
+        <span className="typing-dot" style={{ animationDelay: "0ms" }} />
+        <span className="typing-dot" style={{ animationDelay: "150ms" }} />
+        <span className="typing-dot" style={{ animationDelay: "300ms" }} />
       </div>
     </div>
   );
@@ -355,7 +374,7 @@ function ChatEmpty({ onPick }: { onPick: (q: string) => void }) {
         >
           <Sparkles size={16} />
         </div>
-        <div className="text-[14px] font-medium mb-1">Your full-time CMO</div>
+        <div className="text-[14px] font-medium mb-1">Your full-time growth co-pilot</div>
         <div className="text-[12px] text-muted">
           Strategy, drafts, audits — ask anything.
         </div>

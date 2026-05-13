@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Activity, Link2, Wrench, Brain, CheckCircle2, Lock, Lightbulb } from "lucide-react";
+import { Activity, Link2, Wrench, Brain, CheckCircle2, Lightbulb } from "lucide-react";
 import type { Project, PageSpeedStrategy } from "@/lib/api";
 import { Gauge } from "../ui/Gauge";
 import { Badge } from "../ui/Badge";
@@ -84,8 +84,6 @@ function HealthTab({ project, isInitialDive }: { project: Project; isInitialDive
 
   return (
     <div className="space-y-5">
-      {!hasPagespeed && <ConnectServices />}
-
       {/* SEO posture quick read */}
       {seo && (
         <SectionCard
@@ -221,45 +219,6 @@ function ChecksTab({ project, isInitialDive }: { project: Project; isInitialDive
         ))}
       </ul>
     </SectionCard>
-  );
-}
-
-function ConnectServices() {
-  return (
-    <div
-      className="rounded-xl border p-3 relative scanlines"
-      style={{ borderColor: "var(--border)", background: "var(--surface)" }}
-    >
-      <div className="relative z-[1]">
-        <div className="text-[10.5px] uppercase tracking-[0.14em] text-muted mb-2">
-          Connect Google Services
-        </div>
-        <div className="grid grid-cols-2 gap-2">
-          <ConnectCard name="Analytics" subtitle="Traffic & behavior" />
-          <ConnectCard name="Search Console" subtitle="Search rankings" />
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function ConnectCard({ name, subtitle }: { name: string; subtitle: string }) {
-  return (
-    <button
-      className="text-left p-3 rounded-lg border bg-panel card-hover relative overflow-hidden group"
-      style={{ borderColor: "var(--border)" }}
-    >
-      <div className="flex items-start justify-between mb-2">
-        <div>
-          <div className="text-[12.5px] font-medium">{name}</div>
-          <div className="text-[11px] text-muted">{subtitle}</div>
-        </div>
-        <Lock size={11} className="text-muted" />
-      </div>
-      <div className="text-[10.5px] uppercase tracking-wider font-medium text-accent opacity-80 group-hover:opacity-100">
-        Connect →
-      </div>
-    </button>
   );
 }
 

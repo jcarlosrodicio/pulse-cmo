@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Save, Calendar, Plus, X } from "lucide-react";
-import { Modal } from "../ui/Modal";
+import { Save, Calendar, Plus, X, SlidersHorizontal } from "lucide-react";
+import { Sheet } from "../ui/Sheet";
 import { ChannelIcon } from "../ui/ChannelIcon";
 import type { Project, WritingInstructions as WI } from "@/lib/api";
 
@@ -43,34 +43,37 @@ export function WritingInstructionsModal({
   };
 
   return (
-    <Modal
-      open={open}
-      onClose={onClose}
-      title="Writing Instructions"
-      footer={
-        <>
-          <button
-            onClick={onClose}
-            className="px-3 py-1.5 rounded text-[12px] text-muted hover:text-fg"
-          >
-            Cancel
-          </button>
-          <button
-            onClick={save}
-            disabled={saving}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded border text-[12px] font-medium disabled:opacity-50"
-            style={{
-              borderColor: "var(--accent)",
-              background: "var(--accent-soft)",
-              color: "var(--accent)",
-            }}
-          >
-            <Save size={12} /> {saving ? "Saving…" : "Save"}
-          </button>
-        </>
-      }
-    >
-      <div className="space-y-6">
+    <Sheet open={open} onClose={onClose} width="max-w-[640px]">
+      <header
+        className="flex items-center gap-2.5 px-5 py-3.5 shrink-0"
+        style={{ borderBottom: "1px solid var(--border)" }}
+      >
+        <SlidersHorizontal size={15} className="text-fg-dim" />
+        <h2 className="text-[14px] font-semibold tracking-tight flex-1">
+          Writing Instructions
+        </h2>
+        <button
+          onClick={save}
+          disabled={saving}
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded border text-[12px] font-medium disabled:opacity-50 btn-press"
+          style={{
+            borderColor: "var(--accent)",
+            background: "var(--accent-soft)",
+            color: "var(--accent)",
+          }}
+        >
+          <Save size={12} /> {saving ? "Saving…" : "Save"}
+        </button>
+        <button
+          onClick={onClose}
+          className="p-1.5 rounded hover:bg-white/5 text-muted"
+          aria-label="close"
+        >
+          <X size={15} />
+        </button>
+      </header>
+
+      <div className="flex-1 overflow-y-auto px-5 py-5 space-y-6">
         {/* daily SEO fixes toggle */}
         <ToggleRow
           icon={<Calendar size={14} className="text-accent" />}
@@ -171,7 +174,7 @@ export function WritingInstructionsModal({
           </div>
         </ChannelBlock>
       </div>
-    </Modal>
+    </Sheet>
   );
 }
 

@@ -38,16 +38,23 @@ export function DocumentSheet({
   const [draft, setDraft] = useState("");
   const [copied, setCopied] = useState(false);
   const [regenerating, setRegenerating] = useState(false);
+  // tracks which (project, kind) the current regen belongs to — late
+  // responses for a different kind are ignored
+  const regeneratingForRef = useRef<string | null>(null);
   const fetchedFor = useRef<string | null>(null);
 
   useEffect(() => {
     if (!kind) {
       setDoc(null);
       setEditing(false);
+      setRegenerating(false);
+      regeneratingForRef.current = null;
       fetchedFor.current = null;
       return;
     }
     const key = `${projectId}:${kind}`;
+    // reset regen flag whenever we switch to a different kind
+    setRegenerating(regeneratingForRef.current === key);
     if (fetchedFor.current === key) return;
     fetchedFor.current = key;
 
@@ -115,8 +122,10 @@ export function DocumentSheet({
   };
 
   const regenerate = async () => {
+    const ownKey = `${projectId}:${kind}`;
+    regeneratingForRef.current = ownKey;
     setRegenerating(true);
-    onLogConsole?.("tool", `AI CMO is regenerating ${humanKind(kind)}…`);
+    onLogConsole?.("tool", `Pulse is regenerating ${humanKind(kind)}…`);
     toast.push({
       kind: "info",
       title: "Regenerating",
@@ -124,8 +133,11 @@ export function DocumentSheet({
     });
     try {
       const fresh = await api.regenerateDocument(projectId, kind);
-      setDoc(fresh);
-      setDraft(fresh.content_md);
+      // only apply result if we haven't switched to a different kind
+      if (regeneratingForRef.current === ownKey) {
+        setDoc(fresh);
+        setDraft(fresh.content_md);
+      }
       toast.push({
         kind: "success",
         title: "Regenerated",
@@ -140,7 +152,10 @@ export function DocumentSheet({
       });
       onLogConsole?.("meta", `regen failed: ${(err as Error).message}`);
     } finally {
-      setRegenerating(false);
+      if (regeneratingForRef.current === ownKey) {
+        regeneratingForRef.current = null;
+        setRegenerating(false);
+      }
     }
   };
 

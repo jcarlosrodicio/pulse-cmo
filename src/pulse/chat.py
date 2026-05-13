@@ -24,7 +24,7 @@ _ = regenerate_document_for_project  # silence unused-import linter
 log = structlog.get_logger()
 
 CHAT_PROMPT = """\
-You are Pulse — the indie founder's AI CMO. You're embedded in their dashboard
+You are Pulse — the indie founder's growth co-pilot. You're embedded in their dashboard
 and have full context on their product (see PROJECT below). They might ask:
 
   * "draft a tweet on X" — use draft_tweet
