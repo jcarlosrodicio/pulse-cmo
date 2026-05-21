@@ -1,0 +1,36 @@
+# Pulse — full stack. `docker compose up --build`
+#
+# Put your provider key in .env first:  cp .env.example .env
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file: .env
+    environment:
+      PULSE_HOST: 0.0.0.0
+      PULSE_PORT: "8787"
+      PULSE_DATA_DIR: /data
+    volumes:
+      - pulse-data:/data
+    ports:
+      - "8787:8787"
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+      args:
+        # Next bakes the /api/* rewrite destination at build time
+        PULSE_BACKEND_URL: http://backend:8787
+    environment:
+      PORT: "3030"
+    ports:
+      - "3030:3030"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  pulse-data:

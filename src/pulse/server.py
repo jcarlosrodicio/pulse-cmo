@@ -909,6 +909,15 @@ def main() -> None:
 
     config_path = os.getenv("PULSE_CONFIG", "config.yaml")
     config = Config.load(config_path)
+
+    # env overrides (for run.sh / Docker / any host)
+    if os.getenv("PULSE_HOST"):
+        config.server_host = os.environ["PULSE_HOST"]
+    if os.getenv("PULSE_PORT"):
+        config.server_port = int(os.environ["PULSE_PORT"])
+    if os.getenv("PULSE_DATA_DIR"):
+        config.data_dir = os.environ["PULSE_DATA_DIR"]
+
     app = create_app(config)
     uvicorn.run(
         app,

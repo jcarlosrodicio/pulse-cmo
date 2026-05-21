@@ -62,6 +62,22 @@ cd web && npm install && npm run dev   # → http://localhost:3030
 
 Open the dashboard, paste a product URL, and hit **First dive**. Watch the agent work live in the console; actions land in the feed as they're produced. You can also configure providers, run a traction scan, or open Launch mode from the header.
 
+### One command
+
+```bash
+./run.sh            # installs deps on first run, then starts backend + frontend
+./run.sh --setup-only   # just install
+```
+
+### Docker
+
+```bash
+cp .env.example .env      # add your provider key
+docker compose up --build # → frontend on :3030, backend on :8787
+```
+
+The backend's SQLite db + settings persist in the `pulse-data` volume. The frontend proxies `/api/*` to the backend over the compose network; to point it at a backend elsewhere, rebuild with `--build-arg PULSE_BACKEND_URL=https://your-api`.
+
 ## Configuration
 
 Providers and scheduling live in [`config.yaml`](config.yaml); secrets live in `.env`.
