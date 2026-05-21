@@ -27,6 +27,7 @@ Pulse is a self-hosted "AI CMO" for a single product (or several). Point it at a
 - **Traction** — maps your digital footprint: searches the web, Reddit, and HN for your name/URL, classifies every mention by platform, and tells you where you're strong and where to focus.
 - **Launch mode** — classifies your product into a growth archetype and generates an archetype-driven Week-1 launch plan, with a live tracker (K-factor, funnel %, daily "today's move") and the actual posts to write each day, generated inline.
 - **Per-channel generation** — a "+" on any action group to generate one tweet / Reddit reply / article / SEO audit on demand.
+- **Scheduling + versioning** — set when and how often the daily pass runs (once/twice/custom). Each run snapshots a **version** with a day-over-day summary of what changed (new actions, SEO delta, traction delta), viewable as a timeline.
 - **Multi-provider LLM** — configure any OpenAI-compatible providers with automatic failover, primary/secondary/vision roles, and per-token cost tracking, all from a settings panel.
 
 ## Screenshots

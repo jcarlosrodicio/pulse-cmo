@@ -231,6 +231,16 @@ Pulse runs once per day per project, in the background. Default 06:00 UTC.
 `g` from anywhere (outside a text field) triggers a run. The **Run now** button
 is a split-button — the caret menu also has **Redo first dive** (a full re-scan).
 
+### Schedule + versions
+
+Set **when and how often** the daily pass fires in the project settings sheet
+(**Run schedule**): once a day, twice a day, or a custom list of times.
+
+Every completed first-dive / daily run snapshots a **version** — open the
+**history icon** in the header to see the timeline. Each version carries a short
+"what changed since last time" summary plus delta chips (new actions, SEO
+movement, traction change, run cost). It's a running changelog of your growth.
+
 ---
 
 ## 8. Launch mode
