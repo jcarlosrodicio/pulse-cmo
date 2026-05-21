@@ -211,6 +211,121 @@ export type SettingsPayload = {
   max_iterations: number;
 };
 
+// --- launch mode -----------------------------------------------------------
+
+export type LaunchArchetypeKey =
+  | "viral_artifact"
+  | "dev_tool"
+  | "b2b_saas"
+  | "consumer"
+  | "open_source"
+  | "marketplace";
+
+export type LaunchTask = { text: string; done: boolean };
+
+export type LaunchDayMetrics = {
+  visits: string;
+  north: string;
+  loop: string;
+  referrer: string;
+};
+
+export type LaunchDay = {
+  title: string;
+  channel: string;
+  gate: boolean;
+  tasks: LaunchTask[];
+  metrics: LaunchDayMetrics;
+};
+
+export type LaunchChannel = {
+  name: string;
+  type: "repeatable" | "one_shot";
+  day?: number;
+  why?: string;
+  target?: TargetKind | null;
+};
+
+export type LaunchPlan = {
+  classification: LaunchArchetypeKey;
+  archetype_label: string;
+  growth_engine: string;
+  positioning: { tagline?: string; one_liner?: string; share_hook?: string };
+  metrics: {
+    north: string;
+    loop: string;
+    visits: string;
+    north_star_desc?: string;
+    loop_desc?: string;
+  };
+  channels: LaunchChannel[];
+  days: LaunchDay[];
+  decision_rules: string[];
+  guardrails: string[];
+};
+
+export type LaunchClassification = {
+  archetype: LaunchArchetypeKey;
+  confidence: "high" | "medium" | "low";
+  reasoning: string;
+  secondary?: string | null;
+  watch_outs?: string[];
+  facts?: {
+    key: string;
+    label: string;
+    growth_engine: string;
+    north_star: string;
+    loop_metric: string;
+    channels: LaunchChannel[];
+    avoid: string[];
+  };
+};
+
+export type LaunchIntake = {
+  one_liner?: string;
+  pricing?: string;
+  has_retention_loop?: boolean | null;
+  primary_artifact?: string;
+  audience_who?: string;
+  founder_can_produce?: string[];
+  founder_reach?: string;
+  budget?: string;
+  og_unfurl_works?: boolean | null;
+  goal?: string;
+  launch_date?: string;
+};
+
+export type LaunchCampaign = {
+  id: number;
+  project_id: number;
+  state: "intake" | "classify" | "plan" | "active" | "done";
+  archetype: LaunchArchetypeKey | null;
+  classification: LaunchClassification | null;
+  intake: LaunchIntake;
+  plan: LaunchPlan | null;
+  start_date: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type LaunchScoreboard = {
+  total_north: number;
+  total_loop: number;
+  total_visits: number;
+  k: number;
+  funnel_pct: number;
+  tasks_done: number;
+  tasks_total: number;
+  tasks_pct: number;
+};
+
+export type LaunchAdvice = {
+  move: string;
+  rationale: string;
+  rule_fired: string;
+  scoreboard: LaunchScoreboard;
+};
+
 const API = "/api";
 
 async function json<T>(r: Response): Promise<T> {
@@ -460,6 +575,73 @@ export const api = {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ base_url, api_key }),
       }),
+    );
+  },
+
+  // launch mode
+  async getLaunch(projectId: number) {
+    return json<{ campaign: LaunchCampaign | null }>(
+      await fetch(`${API}/projects/${projectId}/launch`),
+    );
+  },
+  async startLaunch(projectId: number, intake?: LaunchIntake) {
+    return json<{ campaign: LaunchCampaign }>(
+      await fetch(`${API}/projects/${projectId}/launch`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ intake: intake ?? null }),
+      }),
+    );
+  },
+  async updateLaunch(
+    projectId: number,
+    patch: Partial<{
+      state: LaunchCampaign["state"];
+      archetype: LaunchArchetypeKey;
+      intake: LaunchIntake;
+      plan: LaunchPlan;
+      start_date: string;
+    }>,
+  ) {
+    return json<{ campaign: LaunchCampaign }>(
+      await fetch(`${API}/projects/${projectId}/launch`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(patch),
+      }),
+    );
+  },
+  async classifyLaunch(projectId: number) {
+    return json<{ classification: LaunchClassification; campaign: LaunchCampaign }>(
+      await fetch(`${API}/projects/${projectId}/launch/classify`, { method: "POST" }),
+    );
+  },
+  async generateLaunchPlan(projectId: number, archetype: LaunchArchetypeKey) {
+    return json<{ plan: LaunchPlan; campaign: LaunchCampaign }>(
+      await fetch(`${API}/projects/${projectId}/launch/plan`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ archetype }),
+      }),
+    );
+  },
+  async trackLaunch(projectId: number) {
+    return json<LaunchAdvice>(
+      await fetch(`${API}/projects/${projectId}/launch/track`, { method: "POST" }),
+    );
+  },
+  async generateLaunchAsset(projectId: number, target: TargetKind, topic = "") {
+    return json<{ run_id: number; stream_url: string }>(
+      await fetch(`${API}/projects/${projectId}/launch/assets`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ target, topic }),
+      }),
+    );
+  },
+  async deleteLaunch(projectId: number) {
+    return json<{ ok: boolean }>(
+      await fetch(`${API}/projects/${projectId}/launch`, { method: "DELETE" }),
     );
   },
 };

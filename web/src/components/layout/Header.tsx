@@ -9,6 +9,7 @@ import {
   ChevronDown,
   RotateCcw,
   Sparkles,
+  Rocket,
 } from "lucide-react";
 import type { Project, AgentEvent } from "@/lib/api";
 import { TerminalBar, type TerminalState } from "./TerminalBar";
@@ -29,6 +30,7 @@ export function Header({
   onRun,
   onRedoFirstDive,
   onOpenProviderSettings,
+  onOpenLaunch,
   onToggleMobileNav,
   runStatus,
   lastRunCostUsd,
@@ -47,6 +49,7 @@ export function Header({
   onRun: () => void;
   onRedoFirstDive: () => void;
   onOpenProviderSettings: () => void;
+  onOpenLaunch: () => void;
   onToggleMobileNav?: () => void;
   runStatus: "idle" | "running" | "done";
   lastRunCostUsd?: number | null;
@@ -91,6 +94,17 @@ export function Header({
         </div>
 
         <div className="flex-1" />
+
+        {/* launch mode */}
+        <button
+          onClick={onOpenLaunch}
+          className="hidden sm:flex items-center gap-1.5 px-2.5 py-1.5 rounded border font-medium text-[12.5px] btn-press transition-colors text-muted-strong hover:text-fg"
+          style={{ borderColor: "var(--border-strong)" }}
+          title="Launch mode — archetype-driven GTM plan"
+        >
+          <Rocket size={13} />
+          Launch
+        </button>
 
         {/* run split-button */}
         <RunSplitButton

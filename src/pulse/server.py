@@ -36,6 +36,13 @@ from .config import Config
 from .chat import expand_action_detail, stream_chat_reply
 from .llm import LLM, usage_scope
 from .log import setup_logging
+from .launch import (
+    classify_product,
+    compute_scoreboard,
+    default_intake,
+    generate_launch_plan,
+    launch_track_advice,
+)
 from .orchestrator import run_daily, run_first_dive, run_manual, run_targeted
 from .settings_store import SettingsStore
 from .store import ActionStore
@@ -122,6 +129,32 @@ class SaveProviders(BaseModel):
 class ProbeProvider(BaseModel):
     base_url: str
     api_key: str
+
+
+# --- launch mode -----------------------------------------------------------
+
+class StartLaunch(BaseModel):
+    intake: dict[str, Any] | None = None
+
+
+class UpdateLaunch(BaseModel):
+    state: str | None = Field(default=None, pattern="^(intake|classify|plan|active|done)$")
+    archetype: str | None = None
+    intake: dict[str, Any] | None = None
+    plan: dict[str, Any] | None = None
+    start_date: str | None = None
+
+
+class GenerateLaunchPlan(BaseModel):
+    # the archetype the user confirmed (may override the classifier)
+    archetype: str
+
+
+class LaunchAsset(BaseModel):
+    target: str = Field(
+        pattern="^(tweet|linkedin|hn_post|article|reddit_reply|reddit_opportunity|hn_opportunity)$"
+    )
+    topic: str = ""
 
 
 # --- run streaming infra ---------------------------------------------------
@@ -668,6 +701,113 @@ def create_app(config: Config) -> FastAPI:
             return {"ok": True, "models": models}
         except Exception as e:
             return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+    # --- launch mode -------------------------------------------------------
+
+    def _require_project(project_id: int) -> dict:
+        p = store.get_project(project_id)
+        if not p:
+            raise HTTPException(404, "project not found")
+        return p
+
+    @app.get("/projects/{project_id}/launch")
+    async def get_launch(project_id: int) -> dict:
+        _require_project(project_id)
+        campaign = store.get_launch_campaign(project_id)
+        return {"campaign": campaign}
+
+    @app.post("/projects/{project_id}/launch")
+    async def start_launch(project_id: int, body: StartLaunch) -> dict:
+        project = _require_project(project_id)
+        intake = body.intake or default_intake(project)
+        campaign = store.create_launch_campaign(project_id, state="intake", intake=intake)
+        return {"campaign": campaign}
+
+    @app.patch("/projects/{project_id}/launch")
+    async def update_launch(project_id: int, body: UpdateLaunch) -> dict:
+        _require_project(project_id)
+        if not store.get_launch_campaign(project_id):
+            raise HTTPException(404, "no launch campaign — start one first")
+        fields = {k: v for k, v in body.model_dump(exclude_none=True).items()}
+        campaign = store.update_launch_campaign(project_id, **fields)
+        return {"campaign": campaign}
+
+    @app.post("/projects/{project_id}/launch/classify")
+    async def classify_launch(project_id: int) -> dict:
+        project = _require_project(project_id)
+        campaign = store.get_launch_campaign(project_id)
+        if not campaign:
+            campaign = store.create_launch_campaign(
+                project_id, intake=default_intake(project)
+            )
+        async with usage_scope():
+            result = await classify_product(
+                llm, project=project, intake=campaign.get("intake") or {}
+            )
+        store.update_launch_campaign(
+            project_id,
+            state="classify",
+            archetype=result["archetype"],
+            classification=result,
+        )
+        return {"classification": result, "campaign": store.get_launch_campaign(project_id)}
+
+    @app.post("/projects/{project_id}/launch/plan")
+    async def make_launch_plan(project_id: int, body: GenerateLaunchPlan) -> dict:
+        project = _require_project(project_id)
+        campaign = store.get_launch_campaign(project_id)
+        if not campaign:
+            raise HTTPException(404, "no launch campaign — start one first")
+        async with usage_scope():
+            plan = await generate_launch_plan(
+                llm,
+                project=project,
+                archetype=body.archetype,
+                intake=campaign.get("intake") or {},
+            )
+        store.update_launch_campaign(
+            project_id, state="active", archetype=body.archetype, plan=plan
+        )
+        return {"plan": plan, "campaign": store.get_launch_campaign(project_id)}
+
+    @app.post("/projects/{project_id}/launch/track")
+    async def track_launch(project_id: int) -> dict:
+        _require_project(project_id)
+        campaign = store.get_launch_campaign(project_id)
+        if not campaign or not campaign.get("plan"):
+            raise HTTPException(404, "no launch plan yet")
+        scoreboard = compute_scoreboard(campaign["plan"])
+        async with usage_scope():
+            advice = await launch_track_advice(
+                llm, plan=campaign["plan"], scoreboard=scoreboard
+            )
+        return advice
+
+    @app.post("/projects/{project_id}/launch/assets")
+    async def launch_asset(project_id: int, body: LaunchAsset) -> dict:
+        project = _require_project(project_id)
+        run_id = store.create_run(project_id, kind="targeted")
+        topic = body.topic or f"Launch-week content for {project.get('name')}"
+        _spawn(
+            _execute_run(
+                config=config,
+                llm=llm,
+                store=store,
+                broker=broker,
+                project_id=project_id,
+                run_id=run_id,
+                kind="targeted",
+                target=body.target,
+                topic=topic,
+            )
+        )
+        return {"run_id": run_id, "stream_url": f"/runs/{run_id}/stream"}
+
+    @app.delete("/projects/{project_id}/launch")
+    async def delete_launch(project_id: int) -> dict:
+        _require_project(project_id)
+        store.delete_launch_campaign(project_id)
+        return {"ok": True}
 
     return app
 

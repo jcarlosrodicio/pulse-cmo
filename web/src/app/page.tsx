@@ -23,6 +23,7 @@ import { ActionDetailSheet } from "@/components/actions/ActionDetailSheet";
 import { ChatPanel } from "@/components/chat/ChatPanel";
 import { WritingInstructionsModal } from "@/components/settings/WritingInstructions";
 import { SettingsSheet } from "@/components/settings/SettingsSheet";
+import { LaunchWorkspace } from "@/components/launch/LaunchWorkspace";
 import { KeyboardShortcuts } from "@/components/ui/KeyboardShortcuts";
 import { useToast } from "@/components/ui/Toast";
 import { useRunStream } from "@/hooks/useRunStream";
@@ -180,6 +181,7 @@ function Dashboard({
   }, [terminalState]);
   const [showWritingModal, setShowWritingModal] = useState(false);
   const [showProviderSettings, setShowProviderSettings] = useState(false);
+  const [showLaunch, setShowLaunch] = useState(false);
   const [showShortcuts, setShowShortcuts] = useState(false);
   const [generatingTarget, setGeneratingTarget] = useState<TargetKind | null>(null);
   const [mobilePane, setMobilePane] = useState<"company" | "analytics" | "actions" | "chat">("actions");
@@ -400,6 +402,7 @@ function Dashboard({
           start("first_dive");
         }}
         onOpenProviderSettings={() => setShowProviderSettings(true)}
+        onOpenLaunch={() => setShowLaunch(true)}
         onToggleMobileNav={() => setMobilePane("company")}
         runStatus={runStatus}
         lastRunCostUsd={lastRunCostUsd}
@@ -471,6 +474,16 @@ function Dashboard({
       <SettingsSheet
         open={showProviderSettings}
         onClose={() => setShowProviderSettings(false)}
+      />
+
+      <LaunchWorkspace
+        projectId={project.id}
+        projectName={project.name}
+        open={showLaunch}
+        onClose={() => {
+          setShowLaunch(false);
+          refreshActions();
+        }}
       />
 
       <KeyboardShortcuts open={showShortcuts} onClose={() => setShowShortcuts(false)} />

@@ -3,8 +3,11 @@
   "configurations": [
     {
       "name": "pulse-web",
-      "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev"],
+      "runtimeExecutable": "/bin/sh",
+      "runtimeArgs": [
+        "-c",
+        "export PATH=/Users/temme/.nvm/versions/node/v22.14.0/bin:$PATH && exec node node_modules/next/dist/bin/next dev"
+      ],
       "cwd": "web",
       "port": 3030,
       "autoPort": true

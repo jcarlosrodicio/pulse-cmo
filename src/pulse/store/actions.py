@@ -92,12 +92,28 @@ CREATE TABLE IF NOT EXISTS documents (
     UNIQUE (project_id, kind)
 );
 
+CREATE TABLE IF NOT EXISTS launch_campaigns (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER NOT NULL,
+    state TEXT NOT NULL DEFAULT 'intake',  -- intake|classify|plan|active|done
+    archetype TEXT,                         -- viral_artifact|dev_tool|b2b_saas|consumer|open_source|marketplace
+    classification TEXT,                    -- json: full classify result (reasoning, secondary, watch_outs, facts)
+    intake TEXT,                            -- json: Part-2 schema
+    plan TEXT,                              -- json: structured Week-1 plan + tracker state
+    start_date TEXT,                        -- launch Day-1 date (YYYY-MM-DD)
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (project_id) REFERENCES projects(id),
+    UNIQUE (project_id)
+);
+
 CREATE INDEX IF NOT EXISTS idx_actions_project_status ON actions(project_id, status);
 CREATE INDEX IF NOT EXISTS idx_actions_project_type ON actions(project_id, action_type);
 CREATE INDEX IF NOT EXISTS idx_runs_project ON agent_runs(project_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_project ON chat_sessions(project_id);
 CREATE INDEX IF NOT EXISTS idx_messages_session ON chat_messages(session_id);
 CREATE INDEX IF NOT EXISTS idx_documents_project ON documents(project_id);
+CREATE INDEX IF NOT EXISTS idx_launch_project ON launch_campaigns(project_id);
 """
 
 
@@ -532,6 +548,59 @@ class ActionStore:
             )
             return int(cur.lastrowid)
 
+    # --- launch campaigns ---------------------------------------------------
+
+    def get_launch_campaign(self, project_id: int) -> dict[str, Any] | None:
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT * FROM launch_campaigns WHERE project_id=?", (project_id,)
+            ).fetchone()
+        return _hydrate_launch(row)
+
+    def create_launch_campaign(
+        self,
+        project_id: int,
+        *,
+        state: str = "intake",
+        intake: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        now = _now()
+        with self._lock, self._conn() as conn:
+            conn.execute(
+                "INSERT INTO launch_campaigns (project_id, state, intake, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?) "
+                "ON CONFLICT(project_id) DO UPDATE SET state=excluded.state, "
+                "intake=COALESCE(excluded.intake, launch_campaigns.intake), updated_at=excluded.updated_at",
+                (project_id, state, json.dumps(intake) if intake is not None else None, now, now),
+            )
+        return self.get_launch_campaign(project_id)  # type: ignore[return-value]
+
+    def update_launch_campaign(self, project_id: int, **fields: Any) -> dict[str, Any] | None:
+        scalar = {"state", "archetype", "start_date"}
+        json_fields = {"classification", "intake", "plan"}
+        sets, vals = [], []
+        for k, v in fields.items():
+            if k in scalar:
+                sets.append(f"{k}=?")
+                vals.append(v)
+            elif k in json_fields:
+                sets.append(f"{k}=?")
+                vals.append(json.dumps(v) if v is not None else None)
+        if not sets:
+            return self.get_launch_campaign(project_id)
+        sets.append("updated_at=?")
+        vals.append(_now())
+        vals.append(project_id)
+        with self._lock, self._conn() as conn:
+            conn.execute(
+                f"UPDATE launch_campaigns SET {', '.join(sets)} WHERE project_id=?", vals
+            )
+        return self.get_launch_campaign(project_id)
+
+    def delete_launch_campaign(self, project_id: int) -> None:
+        with self._lock, self._conn() as conn:
+            conn.execute("DELETE FROM launch_campaigns WHERE project_id=?", (project_id,))
+
 
 def _hydrate_project(row: sqlite3.Row | None) -> dict[str, Any] | None:
     if not row:
@@ -568,4 +637,14 @@ def _hydrate_document(row: sqlite3.Row | None) -> dict[str, Any] | None:
         return None
     d = dict(row)
     d["metadata"] = json.loads(d["metadata"]) if d.get("metadata") else {}
+    return d
+
+
+def _hydrate_launch(row: sqlite3.Row | None) -> dict[str, Any] | None:
+    if not row:
+        return None
+    d = dict(row)
+    d["classification"] = json.loads(d["classification"]) if d.get("classification") else None
+    d["intake"] = json.loads(d["intake"]) if d.get("intake") else {}
+    d["plan"] = json.loads(d["plan"]) if d.get("plan") else None
     return d
