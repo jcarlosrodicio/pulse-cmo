@@ -92,6 +92,16 @@ CREATE TABLE IF NOT EXISTS documents (
     UNIQUE (project_id, kind)
 );
 
+CREATE TABLE IF NOT EXISTS usage_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER,
+    scope TEXT NOT NULL,          -- 'run:daily', 'launch_plan', 'traction', 'chat', …
+    prompt_tokens INTEGER DEFAULT 0,
+    completion_tokens INTEGER DEFAULT 0,
+    cost_micros INTEGER DEFAULT 0,
+    created_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS project_versions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     project_id INTEGER NOT NULL,
@@ -127,6 +137,7 @@ CREATE INDEX IF NOT EXISTS idx_messages_session ON chat_messages(session_id);
 CREATE INDEX IF NOT EXISTS idx_documents_project ON documents(project_id);
 CREATE INDEX IF NOT EXISTS idx_launch_project ON launch_campaigns(project_id);
 CREATE INDEX IF NOT EXISTS idx_versions_project ON project_versions(project_id);
+CREATE INDEX IF NOT EXISTS idx_usage_project ON usage_events(project_id);
 """
 
 
@@ -145,6 +156,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
         ("projects", "seo_summary", "TEXT"),
         ("projects", "traction_summary", "TEXT"),
         ("projects", "schedule_times", "TEXT"),
+        ("projects", "geo_summary", "TEXT"),
+        ("projects", "links_summary", "TEXT"),
         ("actions", "detail_md", "TEXT"),
         ("agent_runs", "prompt_tokens", "INTEGER DEFAULT 0"),
         ("agent_runs", "completion_tokens", "INTEGER DEFAULT 0"),
@@ -256,6 +269,60 @@ class ActionStore:
                 "UPDATE projects SET traction_summary=? WHERE id=?",
                 (json.dumps(summary), project_id),
             )
+
+    def set_geo_summary(self, project_id: int, summary: dict[str, Any]) -> None:
+        with self._lock, self._conn() as conn:
+            conn.execute(
+                "UPDATE projects SET geo_summary=? WHERE id=?",
+                (json.dumps(summary), project_id),
+            )
+
+    def set_links_summary(self, project_id: int, summary: dict[str, Any]) -> None:
+        with self._lock, self._conn() as conn:
+            conn.execute(
+                "UPDATE projects SET links_summary=? WHERE id=?",
+                (json.dumps(summary), project_id),
+            )
+
+    # --- usage ledger -------------------------------------------------------
+
+    def record_usage(
+        self,
+        project_id: int | None,
+        scope: str,
+        prompt_tokens: int,
+        completion_tokens: int,
+        cost_usd: float,
+    ) -> None:
+        if not (prompt_tokens or completion_tokens):
+            return
+        with self._lock, self._conn() as conn:
+            conn.execute(
+                "INSERT INTO usage_events (project_id, scope, prompt_tokens, completion_tokens, cost_micros, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (project_id, scope, prompt_tokens, completion_tokens, int(round(cost_usd * 1_000_000)), _now()),
+            )
+
+    def usage_totals(self, project_id: int | None = None) -> dict[str, Any]:
+        q = (
+            "SELECT COALESCE(SUM(prompt_tokens),0) p, COALESCE(SUM(completion_tokens),0) c, "
+            "COALESCE(SUM(cost_micros),0) m, COUNT(*) n FROM usage_events"
+        )
+        params: list[Any] = []
+        if project_id is not None:
+            q += " WHERE project_id=?"
+            params.append(project_id)
+        with self._conn() as conn:
+            row = conn.execute(q, params).fetchone()
+        prompt = int(row["p"])
+        completion = int(row["c"])
+        return {
+            "prompt_tokens": prompt,
+            "completion_tokens": completion,
+            "total_tokens": prompt + completion,
+            "cost_usd": int(row["m"]) / 1_000_000.0,
+            "events": int(row["n"]),
+        }
 
     # --- runs ---------------------------------------------------------------
 
@@ -684,6 +751,8 @@ def _hydrate_project(row: sqlite3.Row | None) -> dict[str, Any] | None:
     )
     d["seo_summary"] = json.loads(d["seo_summary"]) if d.get("seo_summary") else None
     d["traction_summary"] = json.loads(d["traction_summary"]) if d.get("traction_summary") else None
+    d["geo_summary"] = json.loads(d["geo_summary"]) if d.get("geo_summary") else None
+    d["links_summary"] = json.loads(d["links_summary"]) if d.get("links_summary") else None
     d["schedule_times"] = json.loads(d["schedule_times"]) if d.get("schedule_times") else None
     # back-compat: derive schedule_times from hour/minute if not set
     if not d["schedule_times"]:

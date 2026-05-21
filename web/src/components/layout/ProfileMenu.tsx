@@ -9,8 +9,10 @@ import {
   Plug,
   Sparkles,
   Activity,
+  Layers,
 } from "lucide-react";
 import { useTheme } from "../ui/Theme";
+import { api, type UsageTotals } from "@/lib/api";
 
 export function ProfileMenu({
   costUsd,
@@ -24,8 +26,15 @@ export function ProfileMenu({
   onOpenSettings: () => void;
 }) {
   const [open, setOpen] = useState(false);
+  const [overall, setOverall] = useState<UsageTotals | null>(null);
   const ref = useRef<HTMLDivElement>(null);
   const { theme, toggle } = useTheme();
+
+  // fetch the all-time usage ledger when the menu opens
+  useEffect(() => {
+    if (!open) return;
+    api.getUsage().then((u) => setOverall(u.overall)).catch(() => {});
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
@@ -90,7 +99,7 @@ export function ProfileMenu({
           }}
           role="menu"
         >
-          {/* usage strip */}
+          {/* last-run usage strip */}
           <div
             className="px-3.5 py-3"
             style={{ borderBottom: "1px solid var(--border)" }}
@@ -102,6 +111,21 @@ export function ProfileMenu({
               <Stat label="cost" value={costText || "—"} accent />
               <Stat label="tokens" value={tokenText || "—"} />
               <Stat label="calls" value={llmCalls != null ? String(llmCalls) : "—"} />
+            </div>
+          </div>
+
+          {/* overall usage — every run + content gen + traction + launch + chat */}
+          <div
+            className="px-3.5 py-3"
+            style={{ borderBottom: "1px solid var(--border)" }}
+          >
+            <div className="flex items-center gap-1.5 text-[10.5px] uppercase tracking-[0.14em] text-muted font-medium mb-2">
+              <Layers size={11} /> Overall
+            </div>
+            <div className="grid grid-cols-3 gap-2 text-center">
+              <Stat label="cost" value={formatCostShort(overall?.cost_usd ?? null) || "—"} accent />
+              <Stat label="tokens" value={overall && overall.total_tokens > 0 ? formatTokens(overall.total_tokens) : "—"} />
+              <Stat label="ops" value={overall ? String(overall.events) : "—"} />
             </div>
           </div>
 

@@ -98,16 +98,18 @@ export function Header({
 
         <div className="flex-1" />
 
-        {/* launch mode */}
+        {/* launch mode — flagship action */}
         <button
           onClick={onOpenLaunch}
-          className="hidden sm:flex items-center gap-1.5 px-2.5 py-1.5 rounded border font-medium text-[12.5px] btn-press transition-colors text-muted-strong hover:text-fg"
-          style={{ borderColor: "var(--border-strong)" }}
+          className="launch-cta hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-semibold text-[12.5px] btn-press"
           title="Launch mode — archetype-driven GTM plan"
         >
           <Rocket size={13} />
           Launch
         </button>
+
+        {/* thin separator before the run controls */}
+        <span className="hidden sm:block w-px h-5 self-center" style={{ background: "var(--border-strong)" }} />
 
         {/* run split-button */}
         <RunSplitButton

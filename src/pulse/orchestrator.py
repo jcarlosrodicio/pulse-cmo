@@ -24,6 +24,7 @@ from .tools.documents import make_document_tools
 from .tools.drafting import make_drafting_tools
 from .tools.reddit import make_reddit_tools
 from .tools.seo import make_seo_tools
+from .tools.geo import make_geo_tools
 from .tools.strategy import make_strategy_tools
 from .tools.web import make_web_tools
 
@@ -53,7 +54,9 @@ core value.
 4. CALL `generate_product_information` to save the Product Information document.
 
 5. AUDIT SEO with `audit_seo` on the homepage. For high + medium findings, call
-   `log_seo_fix`. Skip low unless fewer than 3 total.
+   `log_seo_fix`. Skip low unless fewer than 3 total. Then call `audit_geo`
+   (AI answer-engine readiness) and `audit_links` (link health) on the
+   homepage — one call each. Log any HIGH GEO finding with `log_seo_fix`.
 
 6. DRAFT STARTER CONTENT (do not skip):
    - `draft_tweet`: introduce the product. one tweet. specific.
@@ -158,6 +161,8 @@ def build_registry_for_run(
     for t in make_crawl_tools():
         registry.add(t)
     for t in make_seo_tools(store=store, project_id=project_id):
+        registry.add(t)
+    for t in make_geo_tools(store=store, project_id=project_id):
         registry.add(t)
     for t in make_discovery_tools():
         registry.add(t)

@@ -82,6 +82,42 @@ export type TractionSummary = {
   platforms?: TractionPlatform[];
 };
 
+export type GeoEngine = { engine: string; tokens: string[]; blocked: boolean };
+
+export type GeoSummary = {
+  url: string;
+  score: number;
+  engines: GeoEngine[];
+  signals: {
+    has_llms_txt: boolean;
+    has_jsonld: boolean;
+    has_faq_schema: boolean;
+    schema_types: string[];
+    heading_count: number;
+    question_headings: number;
+    has_meta_description: boolean;
+  };
+  counts: { high: number; medium: number; low: number };
+  findings: Array<{ severity: "high" | "medium" | "low"; category: string; description: string; fix: string }>;
+  passed: Array<{ check: string; category: string }>;
+};
+
+export type LinksSummary = {
+  url: string;
+  counts: { total: number; internal: number; external: number; checked: number; broken: number };
+  broken: Array<{ url: string; status: number | string }>;
+  external_sample: string[];
+  internal_sample: string[];
+};
+
+export type UsageTotals = {
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+  cost_usd: number;
+  events: number;
+};
+
 export type Project = {
   id: number;
   name: string;
@@ -97,6 +133,8 @@ export type Project = {
   pagespeed_summary: PageSpeedSummary | null;
   seo_summary: SeoSummary | null;
   traction_summary: TractionSummary | null;
+  geo_summary: GeoSummary | null;
+  links_summary: LinksSummary | null;
   created_at: string;
   // computed by the server when fetched via GET /projects[/id]
   latest_run?: RunSummary | null;
@@ -734,6 +772,26 @@ export const api = {
   async listVersions(projectId: number) {
     return json<{ versions: ProjectVersion[] }>(
       await fetch(`${API}/projects/${projectId}/versions`),
+    );
+  },
+
+  // usage
+  async getUsage(projectId?: number) {
+    const q = projectId != null ? `?project_id=${projectId}` : "";
+    return json<{ overall: UsageTotals; project: UsageTotals | null }>(
+      await fetch(`${API}/usage${q}`),
+    );
+  },
+
+  // geo + links audits
+  async auditGeo(projectId: number) {
+    return json<{ geo: GeoSummary | null }>(
+      await fetch(`${API}/projects/${projectId}/audit/geo`, { method: "POST" }),
+    );
+  },
+  async auditLinks(projectId: number) {
+    return json<{ links: LinksSummary | null }>(
+      await fetch(`${API}/projects/${projectId}/audit/links`, { method: "POST" }),
     );
   },
 

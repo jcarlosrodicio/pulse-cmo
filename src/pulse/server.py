@@ -291,6 +291,13 @@ async def _execute_run(
                 completion_tokens=tracker.completion_tokens,
                 cost_usd=tracker.cost_usd,
             )
+            store.record_usage(
+                project_id,
+                f"run:{kind}" + (f":{target}" if target else ""),
+                tracker.prompt_tokens,
+                tracker.completion_tokens,
+                tracker.cost_usd,
+            )
             done_event = {
                 "type": "_done",
                 "status": status,
@@ -576,7 +583,9 @@ def create_app(config: Config) -> FastAPI:
         a = store.get_action(action_id)
         if not a:
             raise HTTPException(404, "action not found")
-        detail = await expand_action_detail(llm=llm, store=store, action_id=action_id)
+        async with usage_scope() as t:
+            detail = await expand_action_detail(llm=llm, store=store, action_id=action_id)
+        _log_usage("action_expand", t, a.get("project_id"))
         return {"action_id": action_id, "detail_md": detail}
 
     # --- documents ---------------------------------------------------------
@@ -659,15 +668,17 @@ def create_app(config: Config) -> FastAPI:
 
         async def gen() -> AsyncIterator[bytes]:
             try:
-                async for ev in stream_chat_reply(
-                    config=config,
-                    llm=llm,
-                    store=store,
-                    project_id=project_id,
-                    session_id=session_id,
-                    user_message=body.content,
-                ):
-                    yield f"data: {json.dumps(ev, default=str)}\n\n".encode("utf-8")
+                async with usage_scope() as t:
+                    async for ev in stream_chat_reply(
+                        config=config,
+                        llm=llm,
+                        store=store,
+                        project_id=project_id,
+                        session_id=session_id,
+                        user_message=body.content,
+                    ):
+                        yield f"data: {json.dumps(ev, default=str)}\n\n".encode("utf-8")
+                _log_usage("chat", t, project_id)
             except Exception as e:
                 log.exception("chat_stream_failed")
                 yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n".encode("utf-8")
@@ -737,6 +748,11 @@ def create_app(config: Config) -> FastAPI:
             raise HTTPException(404, "project not found")
         return p
 
+    def _log_usage(scope: str, tracker, project_id: int | None = None) -> None:
+        store.record_usage(
+            project_id, scope, tracker.prompt_tokens, tracker.completion_tokens, tracker.cost_usd
+        )
+
     def _campaign_with_dates(project_id: int) -> dict | None:
         c = store.get_launch_campaign(project_id)
         if c and c.get("plan"):
@@ -759,11 +775,13 @@ def create_app(config: Config) -> FastAPI:
         else:
             doc = store.get_document_by_kind(project_id, "product_information")
             product_md = (doc or {}).get("content_md", "") if doc else ""
-            async with usage_scope():
+            async with usage_scope() as t:
                 intake = await infer_intake(llm, project=project, product_info_md=product_md)
+            _log_usage("launch_infer", t, project_id)
         store.create_launch_campaign(project_id, state="intake", intake=intake)
-        async with usage_scope():
+        async with usage_scope() as t:
             result = await classify_product(llm, project=project, intake=intake)
+        _log_usage("launch_classify", t, project_id)
         store.update_launch_campaign(
             project_id, state="classify", archetype=result["archetype"], classification=result
         )
@@ -786,10 +804,11 @@ def create_app(config: Config) -> FastAPI:
             campaign = store.create_launch_campaign(
                 project_id, intake=default_intake(project)
             )
-        async with usage_scope():
+        async with usage_scope() as t:
             result = await classify_product(
                 llm, project=project, intake=campaign.get("intake") or {}
             )
+        _log_usage("launch_classify", t, project_id)
         store.update_launch_campaign(
             project_id,
             state="classify",
@@ -804,13 +823,14 @@ def create_app(config: Config) -> FastAPI:
         campaign = store.get_launch_campaign(project_id)
         if not campaign:
             raise HTTPException(404, "no launch campaign — start one first")
-        async with usage_scope():
+        async with usage_scope() as t:
             plan = await generate_launch_plan(
                 llm,
                 project=project,
                 archetype=body.archetype,
                 intake=campaign.get("intake") or {},
             )
+        _log_usage("launch_plan", t, project_id)
         store.update_launch_campaign(
             project_id, state="active", archetype=body.archetype, plan=plan
         )
@@ -833,7 +853,7 @@ def create_app(config: Config) -> FastAPI:
         if body.piece_index < 0 or body.piece_index >= len(pieces):
             raise HTTPException(400, "bad piece_index")
         piece = pieces[body.piece_index]
-        async with usage_scope():
+        async with usage_scope() as t:
             result = await draft_launch_content(
                 llm,
                 store,
@@ -842,6 +862,7 @@ def create_app(config: Config) -> FastAPI:
                 brief=piece.get("brief", ""),
                 day_title=day.get("title", ""),
             )
+        _log_usage(f"launch_draft:{piece['kind']}", t, project_id)
         piece["status"] = "drafted"
         piece["variants"] = result["variants"]
         piece["chosen_variant"] = 0
@@ -856,10 +877,11 @@ def create_app(config: Config) -> FastAPI:
         if not campaign or not campaign.get("plan"):
             raise HTTPException(404, "no launch plan yet")
         scoreboard = compute_scoreboard(campaign["plan"])
-        async with usage_scope():
+        async with usage_scope() as t:
             advice = await launch_track_advice(
                 llm, plan=campaign["plan"], scoreboard=scoreboard
             )
+        _log_usage("launch_track", t, project_id)
         return advice
 
     @app.post("/projects/{project_id}/launch/assets")
@@ -902,8 +924,9 @@ def create_app(config: Config) -> FastAPI:
 
         async def _run() -> None:
             try:
-                async with usage_scope():
+                async with usage_scope() as t:
                     await scan_traction(config=config, llm=llm, store=store, project_id=project_id)
+                _log_usage("traction", t, project_id)
             except Exception as e:
                 log.exception("traction_scan_failed", project_id=project_id)
                 store.set_traction_summary(
@@ -918,12 +941,41 @@ def create_app(config: Config) -> FastAPI:
         p = _require_project(project_id)
         return {"traction": p.get("traction_summary")}
 
+    # --- GEO + links audits (on demand) ------------------------------------
+
+    @app.post("/projects/{project_id}/audit/geo")
+    async def audit_geo_now(project_id: int) -> dict:
+        from .tools.geo import _audit_geo_impl
+        p = _require_project(project_id)
+        result = await _audit_geo_impl(p["url"])
+        if result.get("ok"):
+            store.set_geo_summary(project_id, result)
+        return {"geo": store.get_project(project_id).get("geo_summary"), "result": result}
+
+    @app.post("/projects/{project_id}/audit/links")
+    async def audit_links_now(project_id: int) -> dict:
+        from .tools.geo import _audit_links_impl
+        p = _require_project(project_id)
+        result = await _audit_links_impl(p["url"])
+        if result.get("ok"):
+            store.set_links_summary(project_id, result)
+        return {"links": store.get_project(project_id).get("links_summary"), "result": result}
+
     # --- versions ----------------------------------------------------------
 
     @app.get("/projects/{project_id}/versions")
     async def list_versions(project_id: int) -> dict:
         _require_project(project_id)
         return {"versions": store.list_versions(project_id)}
+
+    # --- usage -------------------------------------------------------------
+
+    @app.get("/usage")
+    async def get_usage(project_id: int | None = None) -> dict:
+        return {
+            "overall": store.usage_totals(),
+            "project": store.usage_totals(project_id) if project_id is not None else None,
+        }
 
     return app
 
