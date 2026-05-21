@@ -50,6 +50,38 @@ export type SeoSummary = {
   passed: Array<{ check: string; category: string }>;
 };
 
+export type TractionMention = {
+  title: string;
+  url: string;
+  snippet: string;
+  date: string;
+  extra?: string;
+  platform: string;
+  platform_label: string;
+};
+
+export type TractionPlatform = {
+  key: string;
+  label: string;
+  count: number;
+  strength: "strong" | "emerging" | "thin" | "none";
+  summary: string;
+  mentions: TractionMention[];
+};
+
+export type TractionSummary = {
+  status: "scanning" | "done" | "failed";
+  error?: string;
+  started_at?: string;
+  scanned_at?: string;
+  query_terms?: string[];
+  totals?: { mentions: number; platforms: number };
+  strongest?: string | null;
+  sentiment?: { positive?: number; neutral?: number; negative?: number };
+  insights?: string[];
+  platforms?: TractionPlatform[];
+};
+
 export type Project = {
   id: number;
   name: string;
@@ -63,6 +95,7 @@ export type Project = {
   writing_instructions: WritingInstructions | null;
   pagespeed_summary: PageSpeedSummary | null;
   seo_summary: SeoSummary | null;
+  traction_summary: TractionSummary | null;
   created_at: string;
   // computed by the server when fetched via GET /projects[/id]
   latest_run?: RunSummary | null;
@@ -667,6 +700,18 @@ export const api = {
   async deleteLaunch(projectId: number) {
     return json<{ ok: boolean }>(
       await fetch(`${API}/projects/${projectId}/launch`, { method: "DELETE" }),
+    );
+  },
+
+  // traction (digital footprint)
+  async scanTraction(projectId: number) {
+    return json<{ status: string }>(
+      await fetch(`${API}/projects/${projectId}/traction/scan`, { method: "POST" }),
+    );
+  },
+  async getTraction(projectId: number) {
+    return json<{ traction: TractionSummary | null }>(
+      await fetch(`${API}/projects/${projectId}/traction`),
     );
   },
 };

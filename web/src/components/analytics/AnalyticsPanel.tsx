@@ -1,17 +1,28 @@
 "use client";
 
-import { useState } from "react";
-import { Activity, Link2, Wrench, Brain, CheckCircle2, Lightbulb } from "lucide-react";
-import type { Project, PageSpeedStrategy } from "@/lib/api";
+import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  Activity,
+  Wrench,
+  Brain,
+  CheckCircle2,
+  Lightbulb,
+  Radar,
+  RefreshCw,
+  Loader2,
+  ExternalLink,
+  Sparkles,
+} from "lucide-react";
+import { api, type Project, type PageSpeedStrategy, type TractionSummary, type TractionPlatform } from "@/lib/api";
 import { Gauge } from "../ui/Gauge";
 import { Badge } from "../ui/Badge";
 import { Skeleton, SkeletonText } from "../ui/Skeleton";
 
-type Tab = "health" | "links" | "technical" | "geo" | "checks";
+type Tab = "health" | "traction" | "technical" | "geo" | "checks";
 
 const TABS: { id: Tab; label: string; icon: typeof Activity }[] = [
   { id: "health", label: "Health", icon: Activity },
-  { id: "links", label: "Links", icon: Link2 },
+  { id: "traction", label: "Traction", icon: Radar },
   { id: "technical", label: "Technical", icon: Wrench },
   { id: "geo", label: "AI / GEO", icon: Brain },
   { id: "checks", label: "Checks", icon: CheckCircle2 },
@@ -62,7 +73,7 @@ export function AnalyticsPanel({
 
       <div className="flex-1 overflow-y-auto px-4 lg:px-5 py-4 space-y-5">
         {tab === "health" && <HealthTab project={project} isInitialDive={isInitialDive} />}
-        {tab === "links" && <PlaceholderTab title="Links analysis coming soon" subtitle="we'll show internal/external link health, broken links, and inbound mention tracking" />}
+        {tab === "traction" && <TractionTab project={project} />}
         {tab === "technical" && <TechnicalTab project={project} isInitialDive={isInitialDive} />}
         {tab === "geo" && <PlaceholderTab title="AI / GEO answer engines" subtitle="how your site is cited by ChatGPT, Claude, Perplexity, Gemini — coming soon" />}
         {tab === "checks" && <ChecksTab project={project} isInitialDive={isInitialDive} />}
@@ -220,6 +231,250 @@ function ChecksTab({ project, isInitialDive }: { project: Project; isInitialDive
       </ul>
     </SectionCard>
   );
+}
+
+/* ── traction (digital footprint) ─────────────────────────────────── */
+
+const PLATFORM_ICON: Record<string, string> = {
+  reddit: "r/",
+  hn: "Y",
+  x: "𝕏",
+  github: "▣",
+  youtube: "▶",
+  producthunt: "P",
+  linkedin: "in",
+  blog: "✎",
+  directory: "≡",
+  web: "◍",
+};
+
+const STRENGTH_TONE: Record<string, "accent" | "warn" | "muted"> = {
+  strong: "accent",
+  emerging: "warn",
+  thin: "muted",
+  none: "muted",
+};
+
+function TractionTab({ project }: { project: Project }) {
+  const [traction, setTraction] = useState<TractionSummary | null>(project.traction_summary);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  useEffect(() => {
+    setTraction(project.traction_summary);
+  }, [project.id, project.traction_summary]);
+
+  const scanning = traction?.status === "scanning";
+
+  const poll = useCallback(() => {
+    if (pollRef.current) clearInterval(pollRef.current);
+    pollRef.current = setInterval(async () => {
+      try {
+        const { traction } = await api.getTraction(project.id);
+        setTraction(traction);
+        if (traction?.status !== "scanning" && pollRef.current) {
+          clearInterval(pollRef.current);
+          pollRef.current = null;
+        }
+      } catch {
+        /* keep polling */
+      }
+    }, 3000);
+  }, [project.id]);
+
+  useEffect(() => {
+    if (scanning) poll();
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current);
+    };
+  }, [scanning, poll]);
+
+  const scan = async () => {
+    setTraction({ status: "scanning", started_at: new Date().toISOString() });
+    try {
+      await api.scanTraction(project.id);
+      poll();
+    } catch {
+      setTraction({ status: "failed", error: "couldn't start scan" });
+    }
+  };
+
+  // empty / first run
+  if (!traction) {
+    return (
+      <div className="rounded-xl border border-dashed py-12 px-6 text-center bg-grid" style={{ borderColor: "var(--border-strong)" }}>
+        <Radar size={22} className="mx-auto text-muted mb-2.5" />
+        <div className="text-[13px] font-medium mb-1">Map your digital footprint</div>
+        <div className="text-[12px] text-muted max-w-sm mx-auto mb-4">
+          Pulse searches the web, Reddit, and Hacker News for {project.name} and shows where you&rsquo;re
+          being talked about, where you&rsquo;re strong, and where to focus next.
+        </div>
+        <ScanButton scanning={false} onClick={scan} label="Scan footprint" />
+      </div>
+    );
+  }
+
+  if (traction.status === "scanning") {
+    return (
+      <div className="py-14 text-center">
+        <Loader2 size={22} className="mx-auto animate-spin text-accent mb-3" />
+        <div className="text-[13px] font-medium mb-1">Scanning the web…</div>
+        <div className="text-[12px] text-muted">Searching Reddit, Hacker News, and the open web for mentions.</div>
+      </div>
+    );
+  }
+
+  if (traction.status === "failed") {
+    return (
+      <div className="py-12 text-center">
+        <div className="text-[13px] text-danger mb-1">Scan failed</div>
+        <div className="text-[12px] text-muted mb-4">{traction.error}</div>
+        <ScanButton scanning={false} onClick={scan} label="Retry scan" />
+      </div>
+    );
+  }
+
+  const platforms = traction.platforms || [];
+  const strongest = platforms.find((p) => p.key === traction.strongest);
+  const sent = traction.sentiment || {};
+
+  return (
+    <div className="space-y-5">
+      {/* header row */}
+      <div className="flex items-center gap-2">
+        <div className="flex-1">
+          <div className="text-[10.5px] uppercase tracking-[0.14em] text-muted">Digital footprint</div>
+          <div className="text-[12px] text-muted-strong font-mono">
+            {traction.totals?.mentions ?? 0} mentions · {traction.totals?.platforms ?? 0} platforms
+            {traction.scanned_at ? ` · ${relScan(traction.scanned_at)}` : ""}
+          </div>
+        </div>
+        <ScanButton scanning={false} onClick={scan} label="Rescan" small />
+      </div>
+
+      {/* summary tiles */}
+      <div className="grid grid-cols-3 gap-2">
+        <FootprintTile
+          label="Strongest"
+          value={strongest?.label || "—"}
+          accent
+        />
+        <FootprintTile label="Mentions" value={String(traction.totals?.mentions ?? 0)} />
+        <FootprintTile
+          label="Sentiment"
+          value={`${sent.positive ?? 0}+ / ${sent.negative ?? 0}−`}
+        />
+      </div>
+
+      {/* insights */}
+      {traction.insights && traction.insights.length > 0 && (
+        <SectionCard title="Where to focus" subtitle="From your footprint">
+          <ul className="space-y-2">
+            {traction.insights.map((ins, i) => (
+              <li key={i} className="flex items-start gap-2 text-[12.5px] text-fg-dim">
+                <Sparkles size={12} className="text-accent mt-0.5 shrink-0" />
+                {ins}
+              </li>
+            ))}
+          </ul>
+        </SectionCard>
+      )}
+
+      {/* per-platform */}
+      <div className="space-y-3">
+        {platforms.map((p) => (
+          <PlatformCard key={p.key} platform={p} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function PlatformCard({ platform }: { platform: TractionPlatform }) {
+  const [open, setOpen] = useState(platform.strength === "strong");
+  return (
+    <div className="rounded-xl border bg-surface overflow-hidden" style={{ borderColor: "var(--border)" }}>
+      <button onClick={() => setOpen((v) => !v)} className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-left hover:bg-white/3 btn-press">
+        <span
+          className="w-7 h-7 rounded-md flex items-center justify-center text-[11px] font-mono font-medium shrink-0"
+          style={{ background: "var(--elevated)", color: "var(--fg-dim)" }}
+        >
+          {PLATFORM_ICON[platform.key] || "◍"}
+        </span>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2">
+            <span className="text-[13px] font-medium">{platform.label}</span>
+            <Badge tone={STRENGTH_TONE[platform.strength]}>{platform.strength}</Badge>
+          </div>
+          {platform.summary && <div className="text-[11.5px] text-muted line-clamp-1 mt-0.5">{platform.summary}</div>}
+        </div>
+        <span className="text-[11px] text-muted font-mono tabular shrink-0">{platform.count}</span>
+      </button>
+      {open && (
+        <ul style={{ borderTop: "1px solid var(--border)" }}>
+          {platform.mentions.map((m, i) => (
+            <li key={i} className="px-3.5 py-2.5 border-b last:border-b-0" style={{ borderColor: "var(--border)" }}>
+              <a
+                href={m.url}
+                target="_blank"
+                rel="noreferrer"
+                className="flex items-start gap-2 group"
+              >
+                <div className="flex-1 min-w-0">
+                  <div className="text-[12.5px] font-medium leading-snug line-clamp-2 group-hover:text-accent">{m.title || m.url}</div>
+                  {m.snippet && <div className="text-[11.5px] text-muted line-clamp-2 mt-0.5">{m.snippet}</div>}
+                  <div className="text-[10.5px] text-muted font-mono mt-1">
+                    {m.extra ? `${m.extra}` : ""}{m.extra && m.date ? " · " : ""}{m.date ? shortDate(m.date) : ""}
+                  </div>
+                </div>
+                <ExternalLink size={12} className="text-muted shrink-0 mt-0.5 opacity-0 group-hover:opacity-100" />
+              </a>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function FootprintTile({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
+  return (
+    <div className="rounded-lg border bg-panel p-2.5" style={{ borderColor: "var(--border)" }}>
+      <div className="text-[10px] uppercase tracking-wider text-muted mb-1">{label}</div>
+      <div className="text-[14px] font-medium truncate" style={{ color: accent ? "var(--accent)" : "var(--fg)" }}>{value}</div>
+    </div>
+  );
+}
+
+function ScanButton({ scanning, onClick, label, small }: { scanning: boolean; onClick: () => void; label: string; small?: boolean }) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={scanning}
+      className={`inline-flex items-center gap-1.5 rounded-lg border font-medium btn-press disabled:opacity-50 ${small ? "px-2.5 py-1 text-[11.5px]" : "px-3 py-1.5 text-[12.5px]"}`}
+      style={{ borderColor: "var(--accent)", background: "var(--accent-soft)", color: "var(--accent)" }}
+    >
+      {scanning ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
+      {label}
+    </button>
+  );
+}
+
+function relScan(iso: string): string {
+  const diff = (Date.now() - new Date(iso).getTime()) / 1000;
+  if (diff < 60) return "just now";
+  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+  return `${Math.floor(diff / 86400)}d ago`;
+}
+
+function shortDate(iso: string): string {
+  try {
+    const d = new Date(iso.length === 10 ? iso + "T00:00:00" : iso);
+    if (isNaN(d.getTime())) return iso.slice(0, 10);
+    return d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+  } catch {
+    return iso;
+  }
 }
 
 function SectionCard({

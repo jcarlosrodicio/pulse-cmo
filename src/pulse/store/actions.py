@@ -130,6 +130,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
         ("projects", "writing_instructions", "TEXT"),
         ("projects", "pagespeed_summary", "TEXT"),
         ("projects", "seo_summary", "TEXT"),
+        ("projects", "traction_summary", "TEXT"),
         ("actions", "detail_md", "TEXT"),
         ("agent_runs", "prompt_tokens", "INTEGER DEFAULT 0"),
         ("agent_runs", "completion_tokens", "INTEGER DEFAULT 0"),
@@ -232,6 +233,13 @@ class ActionStore:
         with self._lock, self._conn() as conn:
             conn.execute(
                 "UPDATE projects SET seo_summary=? WHERE id=?",
+                (json.dumps(summary), project_id),
+            )
+
+    def set_traction_summary(self, project_id: int, summary: dict[str, Any]) -> None:
+        with self._lock, self._conn() as conn:
+            conn.execute(
+                "UPDATE projects SET traction_summary=? WHERE id=?",
                 (json.dumps(summary), project_id),
             )
 
@@ -615,6 +623,7 @@ def _hydrate_project(row: sqlite3.Row | None) -> dict[str, Any] | None:
         json.loads(d["pagespeed_summary"]) if d.get("pagespeed_summary") else None
     )
     d["seo_summary"] = json.loads(d["seo_summary"]) if d.get("seo_summary") else None
+    d["traction_summary"] = json.loads(d["traction_summary"]) if d.get("traction_summary") else None
     return d
 
 

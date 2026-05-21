@@ -20,6 +20,7 @@ import asyncio
 import json
 import os
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, AsyncIterator
 from urllib.parse import urlparse
@@ -49,6 +50,7 @@ from .launch import (
 from .orchestrator import run_daily, run_first_dive, run_manual, run_targeted
 from .settings_store import SettingsStore
 from .store import ActionStore
+from .traction import scan_traction
 
 log = structlog.get_logger()
 
@@ -868,6 +870,36 @@ def create_app(config: Config) -> FastAPI:
         _require_project(project_id)
         store.delete_launch_campaign(project_id)
         return {"ok": True}
+
+    # --- traction (digital footprint) --------------------------------------
+
+    @app.post("/projects/{project_id}/traction/scan")
+    async def traction_scan(project_id: int) -> dict:
+        _require_project(project_id)
+        # mark scanning immediately so the UI can show progress; preserve any
+        # prior result fields under the placeholder isn't needed — status drives it
+        store.set_traction_summary(
+            project_id,
+            {"status": "scanning", "started_at": datetime.now(timezone.utc).isoformat()},
+        )
+
+        async def _run() -> None:
+            try:
+                async with usage_scope():
+                    await scan_traction(config=config, llm=llm, store=store, project_id=project_id)
+            except Exception as e:
+                log.exception("traction_scan_failed", project_id=project_id)
+                store.set_traction_summary(
+                    project_id, {"status": "failed", "error": f"{type(e).__name__}: {e}"}
+                )
+
+        _spawn(_run())
+        return {"status": "scanning"}
+
+    @app.get("/projects/{project_id}/traction")
+    async def get_traction(project_id: int) -> dict:
+        p = _require_project(project_id)
+        return {"traction": p.get("traction_summary")}
 
     return app
 
