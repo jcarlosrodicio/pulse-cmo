@@ -8,12 +8,15 @@ import {
   Sparkles,
   Check,
   ChevronRight,
+  ChevronDown,
   Target,
-  Compass,
   AlertTriangle,
   RefreshCw,
   Wand2,
   Trash2,
+  Copy,
+  ExternalLink,
+  Pencil,
 } from "lucide-react";
 import {
   api,
@@ -23,7 +26,9 @@ import {
   type LaunchIntake,
   type LaunchDay,
   type LaunchAdvice,
-  type TargetKind,
+  type LaunchClassification,
+  type LaunchContentPiece,
+  type LaunchContentKind,
 } from "@/lib/api";
 import { useToast } from "../ui/Toast";
 
@@ -34,6 +39,23 @@ const ARCHETYPE_LABELS: Record<LaunchArchetypeKey, string> = {
   consumer: "Consumer app",
   open_source: "Open source",
   marketplace: "Marketplace / network",
+};
+
+const CONTENT_LABEL: Record<LaunchContentKind, string> = {
+  tweet: "X / Tweet",
+  reddit_post: "Reddit post",
+  hn_post: "Show HN",
+  linkedin: "LinkedIn",
+  article: "Article",
+};
+
+// where to go to post each kind
+const CONTENT_OPEN: Record<LaunchContentKind, { label: string; url: string }> = {
+  tweet: { label: "Open X", url: "https://x.com/compose/post" },
+  reddit_post: { label: "Open Reddit", url: "https://www.reddit.com/submit" },
+  hn_post: { label: "Open HN", url: "https://news.ycombinator.com/submit" },
+  linkedin: { label: "Open LinkedIn", url: "https://www.linkedin.com/feed/?shareActive=true" },
+  article: { label: "—", url: "" },
 };
 
 export function LaunchWorkspace({
@@ -81,24 +103,14 @@ export function LaunchWorkspace({
     };
   }, [open, onClose]);
 
-  const start = async (intake?: LaunchIntake) => {
+  const start = async () => {
     setBusy("start");
     try {
-      const { campaign } = await api.startLaunch(projectId, intake);
+      const { campaign } = await api.startLaunch(projectId);
       setCampaign(campaign);
-    } finally {
-      setBusy(null);
-    }
-  };
-
-  const classify = async () => {
-    setBusy("classify");
-    try {
-      const { campaign } = await api.classifyLaunch(projectId);
-      setCampaign(campaign);
-      toast.push({ kind: "success", title: "Classified", detail: "Confirm or override below." });
+      toast.push({ kind: "success", title: "Classified", detail: "Confirm the archetype below." });
     } catch (e) {
-      toast.push({ kind: "error", title: "Classify failed", detail: String((e as Error).message) });
+      toast.push({ kind: "error", title: "Couldn't start", detail: String((e as Error).message) });
     } finally {
       setBusy(null);
     }
@@ -131,14 +143,11 @@ export function LaunchWorkspace({
     <>
       <div className="sheet-overlay" onClick={onClose} />
       <div className="launch-panel">
-        {/* header */}
         <header
           className="flex items-center gap-3 px-6 py-3.5 shrink-0"
           style={{ borderBottom: "1px solid var(--border)", background: "var(--bg)" }}
         >
-          <span className="text-accent">
-            <Rocket size={17} />
-          </span>
+          <span className="text-accent"><Rocket size={17} /></span>
           <h2 className="text-[15px] font-semibold tracking-tight">Launch mode</h2>
           {campaign?.archetype && (
             <span
@@ -150,11 +159,7 @@ export function LaunchWorkspace({
           )}
           <div className="flex-1" />
           {campaign && (
-            <button
-              onClick={reset}
-              className="flex items-center gap-1 text-[11.5px] text-muted hover:text-danger btn-press px-2 py-1 rounded"
-              title="discard campaign"
-            >
+            <button onClick={reset} className="flex items-center gap-1 text-[11.5px] text-muted hover:text-danger btn-press px-2 py-1 rounded" title="discard">
               <Trash2 size={11} /> Reset
             </button>
           )}
@@ -169,25 +174,19 @@ export function LaunchWorkspace({
               <Loader2 size={20} className="animate-spin text-accent" />
             </div>
           ) : !campaign ? (
-            <LaunchIntro onStart={() => start()} busy={busy === "start"} projectName={projectName} />
-          ) : state === "intake" || state === "classify" ? (
-            <SetupFlow
+            <LaunchIntro onStart={start} busy={busy === "start"} projectName={projectName} />
+          ) : (state === "intake" || state === "classify") && campaign.classification ? (
+            <ConfirmView
+              projectId={projectId}
               campaign={campaign}
               busy={busy}
-              onSaveIntake={(intake) => api.updateLaunch(projectId, { intake }).then((r) => setCampaign(r.campaign))}
-              onClassify={classify}
+              onIntake={(intake) => api.updateLaunch(projectId, { intake }).then((r) => setCampaign(r.campaign))}
               onGeneratePlan={generatePlan}
             />
           ) : campaign.plan ? (
-            <TrackBoard
-              projectId={projectId}
-              campaign={campaign}
-              onCampaign={setCampaign}
-            />
+            <TrackBoard projectId={projectId} campaign={campaign} onCampaign={setCampaign} />
           ) : (
-            <div className="p-8 text-center text-muted text-[13px]">
-              No plan yet. <button onClick={classify} className="text-accent underline">Classify the product</button> to begin.
-            </div>
+            <LaunchIntro onStart={start} busy={busy === "start"} projectName={projectName} />
           )}
         </div>
       </div>
@@ -197,31 +196,17 @@ export function LaunchWorkspace({
 
 /* ── intro ─────────────────────────────────────────────────────────── */
 
-function LaunchIntro({
-  onStart,
-  busy,
-  projectName,
-}: {
-  onStart: () => void;
-  busy: boolean;
-  projectName: string;
-}) {
+function LaunchIntro({ onStart, busy, projectName }: { onStart: () => void; busy: boolean; projectName: string }) {
   return (
     <div className="max-w-[560px] mx-auto px-6 py-14 text-center">
-      <div
-        className="w-12 h-12 rounded-2xl mx-auto mb-4 flex items-center justify-center"
-        style={{ background: "var(--accent-soft)", color: "var(--accent)" }}
-      >
+      <div className="w-12 h-12 rounded-2xl mx-auto mb-4 flex items-center justify-center" style={{ background: "var(--accent-soft)", color: "var(--accent)" }}>
         <Rocket size={20} />
       </div>
-      <h1 className="text-[22px] font-semibold tracking-tight mb-2">
-        Plan {projectName}&rsquo;s launch
-      </h1>
+      <h1 className="text-[22px] font-semibold tracking-tight mb-2">Plan {projectName}&rsquo;s launch</h1>
       <p className="text-[13.5px] text-muted leading-relaxed mb-6">
-        Pulse classifies your product into one growth archetype, then derives the
-        right channels, success metric, and a Week-1 board from it. No generic
-        &ldquo;post on all your socials&rdquo; advice. The plan comes with a
-        tracker that tells you the single most important move each day.
+        Pulse reads everything it already knows about your product, classifies it
+        into one growth archetype, and builds a day-by-day Week-1 plan, with the
+        actual posts to write each day. You confirm; you don&rsquo;t fill out a form.
       </p>
       <button
         onClick={onStart}
@@ -230,155 +215,124 @@ function LaunchIntro({
         style={{ background: "var(--accent)", color: "var(--accent-fg)" }}
       >
         {busy ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
-        Start launch plan
+        {busy ? "Reading your product…" : "Plan my launch"}
       </button>
     </div>
   );
 }
 
-/* ── intake + classify ─────────────────────────────────────────────── */
+/* ── confirm (classification-first) ────────────────────────────────── */
 
-function SetupFlow({
+function ConfirmView({
+  projectId,
   campaign,
   busy,
-  onSaveIntake,
-  onClassify,
+  onIntake,
   onGeneratePlan,
 }: {
+  projectId: number;
   campaign: LaunchCampaign;
   busy: string | null;
-  onSaveIntake: (intake: LaunchIntake) => Promise<unknown>;
-  onClassify: () => void;
+  onIntake: (intake: LaunchIntake) => Promise<unknown>;
   onGeneratePlan: (a: LaunchArchetypeKey) => void;
 }) {
-  const [intake, setIntake] = useState<LaunchIntake>(campaign.intake || {});
+  void projectId;
+  const cls = campaign.classification as LaunchClassification;
   const [override, setOverride] = useState<LaunchArchetypeKey | null>(null);
-  const cls = campaign.classification;
-  const chosen = override ?? cls?.archetype ?? null;
+  const [showDetails, setShowDetails] = useState(false);
+  const [intake, setIntake] = useState<LaunchIntake>(campaign.intake || {});
+  const chosen = override ?? cls.archetype;
 
-  const set = <K extends keyof LaunchIntake>(k: K, v: LaunchIntake[K]) =>
-    setIntake((p) => ({ ...p, [k]: v }));
-
-  const saveAndClassify = async () => {
-    await onSaveIntake(intake);
-    onClassify();
-  };
+  const set = <K extends keyof LaunchIntake>(k: K, v: LaunchIntake[K]) => setIntake((p) => ({ ...p, [k]: v }));
 
   return (
-    <div className="max-w-[640px] mx-auto px-6 py-8 space-y-6">
-      {/* intake */}
-      <section>
-        <SectionLabel n={1} title="Tell Pulse about the launch" />
-        <div className="space-y-3.5 mt-3">
-          <Field label="One-liner — what it does">
-            <input className="li-input" value={intake.one_liner || ""} onChange={(e) => set("one_liner", e.target.value)} placeholder="e.g. pick your AI tools, rank them, get a shareable card" />
-          </Field>
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="Pricing">
-              <select className="li-input" value={intake.pricing || ""} onChange={(e) => set("pricing", e.target.value)}>
-                <option value="">choose…</option>
-                {["free", "freemium", "one-time", "subscription", "usage-based"].map((o) => <option key={o} value={o}>{o}</option>)}
-              </select>
-            </Field>
-            <Field label="Founder reach">
-              <select className="li-input" value={intake.founder_reach || ""} onChange={(e) => set("founder_reach", e.target.value)}>
-                <option value="">choose…</option>
-                {["low", "mid", "high"].map((o) => <option key={o} value={o}>{o}</option>)}
-              </select>
-            </Field>
-          </div>
-          <Field label="Primary artifact (the thing users produce/share, if any)">
-            <input className="li-input" value={intake.primary_artifact || ""} onChange={(e) => set("primary_artifact", e.target.value)} placeholder="e.g. a shareable stack card — or leave blank" />
-          </Field>
-          <Field label="Who is the audience">
-            <input className="li-input" value={intake.audience_who || ""} onChange={(e) => set("audience_who", e.target.value)} placeholder="e.g. indie developers, solo founders" />
-          </Field>
-          <div className="grid grid-cols-2 gap-3">
-            <ToggleField label="Has a retention loop?" value={intake.has_retention_loop} onChange={(v) => set("has_retention_loop", v)} />
-            <ToggleField label="OG link unfurls correctly?" value={intake.og_unfurl_works} onChange={(v) => set("og_unfurl_works", v)} />
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="Budget">
-              <select className="li-input" value={intake.budget || "0"} onChange={(e) => set("budget", e.target.value)}>
-                {["0", "small", "funded"].map((o) => <option key={o} value={o}>{o}</option>)}
-              </select>
-            </Field>
-            <Field label="Launch date">
-              <input type="date" className="li-input" value={intake.launch_date || ""} onChange={(e) => set("launch_date", e.target.value)} />
-            </Field>
-          </div>
-          <Field label="Founder can produce (comma-separated)">
-            <input
-              className="li-input"
-              value={(intake.founder_can_produce || []).join(", ")}
-              onChange={(e) => set("founder_can_produce", e.target.value.split(",").map((s) => s.trim()).filter(Boolean))}
-              placeholder="video, writing, design"
-            />
-          </Field>
+    <div className="max-w-[640px] mx-auto px-6 py-8 space-y-5">
+      <div className="text-center">
+        <div className="text-[10.5px] uppercase tracking-[0.16em] text-muted font-medium mb-1">Pulse&rsquo;s read</div>
+        <h1 className="text-[20px] font-semibold tracking-tight">This looks like a</h1>
+      </div>
+
+      {/* archetype card */}
+      <div className="rounded-xl border bg-surface p-4" style={{ borderColor: "var(--accent-strong)" }}>
+        <div className="flex items-center gap-2 mb-2">
+          <Target size={14} className="text-accent" />
+          <span className="text-[15px] font-semibold">{cls.facts?.label || ARCHETYPE_LABELS[cls.archetype]}</span>
+          <span className="text-[10.5px] uppercase tracking-wider font-mono text-muted ml-auto">{cls.confidence} confidence</span>
         </div>
-      </section>
+        <p className="text-[12.5px] text-fg-dim leading-relaxed mb-3">{cls.reasoning}</p>
+        {cls.facts && (
+          <div className="grid grid-cols-2 gap-3 text-[12px]">
+            <DerivedFact label="North-star" value={cls.facts.north_star} />
+            <DerivedFact label="Loop metric" value={cls.facts.loop_metric} />
+            <DerivedFact label="Growth engine" value={cls.facts.growth_engine} span />
+          </div>
+        )}
+        {cls.facts?.avoid && cls.facts.avoid.length > 0 && (
+          <div className="flex items-start gap-1.5 text-[11.5px] text-muted mt-3">
+            <AlertTriangle size={12} className="text-warn mt-0.5 shrink-0" />
+            <span>Avoid: {cls.facts.avoid.join(", ")}</span>
+          </div>
+        )}
+      </div>
 
-      {!cls ? (
-        <button
-          onClick={saveAndClassify}
-          disabled={busy === "classify"}
-          className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg font-medium text-[13px] btn-press disabled:opacity-50"
-          style={{ background: "var(--accent)", color: "var(--accent-fg)" }}
-        >
-          {busy === "classify" ? <Loader2 size={14} className="animate-spin" /> : <Compass size={14} />}
-          Classify my product
+      {/* override */}
+      <div className="flex items-center gap-2">
+        <span className="text-[11.5px] text-muted">Not right?</span>
+        <select className="li-input flex-1" value={chosen} onChange={(e) => setOverride(e.target.value as LaunchArchetypeKey)}>
+          {Object.entries(ARCHETYPE_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+        </select>
+      </div>
+
+      {/* inferred details (collapsed) */}
+      <div className="rounded-xl border bg-surface overflow-hidden" style={{ borderColor: "var(--border)" }}>
+        <button onClick={() => setShowDetails((v) => !v)} className="w-full flex items-center gap-2 px-3.5 py-2.5 text-left btn-press">
+          <Pencil size={12} className="text-muted" />
+          <span className="text-[12.5px] font-medium flex-1">What Pulse inferred</span>
+          <span className="text-[11px] text-muted">{showDetails ? "hide" : "review / edit"}</span>
+          <ChevronDown size={14} className="text-muted transition-transform" style={{ transform: showDetails ? "rotate(0)" : "rotate(-90deg)" }} />
         </button>
-      ) : (
-        <>
-          {/* classification result */}
-          <section>
-            <SectionLabel n={2} title="Pulse's read — confirm or override" />
-            <div className="mt-3 rounded-xl border bg-surface p-4" style={{ borderColor: "var(--accent-strong)" }}>
-              <div className="flex items-center gap-2 mb-2">
-                <Target size={14} className="text-accent" />
-                <span className="text-[14px] font-semibold">{cls.facts?.label || ARCHETYPE_LABELS[cls.archetype]}</span>
-                <span className="text-[10.5px] uppercase tracking-wider font-mono text-muted ml-auto">{cls.confidence} confidence</span>
-              </div>
-              <p className="text-[12.5px] text-fg-dim leading-relaxed mb-3">{cls.reasoning}</p>
-              {cls.facts && (
-                <div className="grid grid-cols-2 gap-3 text-[12px] mb-3">
-                  <DerivedFact label="North-star" value={cls.facts.north_star} />
-                  <DerivedFact label="Loop metric" value={cls.facts.loop_metric} />
-                  <DerivedFact label="Growth engine" value={cls.facts.growth_engine} span />
-                </div>
-              )}
-              {cls.facts?.avoid && cls.facts.avoid.length > 0 && (
-                <div className="flex items-start gap-1.5 text-[11.5px] text-muted">
-                  <AlertTriangle size={12} className="text-warn mt-0.5 shrink-0" />
-                  <span>Avoid: {cls.facts.avoid.join(", ")}</span>
-                </div>
-              )}
+        {showDetails && (
+          <div className="px-3.5 pb-3.5 space-y-3" style={{ borderTop: "1px solid var(--border)" }}>
+            <div className="grid grid-cols-2 gap-3 pt-3">
+              <Field label="Pricing">
+                <select className="li-input" value={intake.pricing || ""} onChange={(e) => set("pricing", e.target.value)}>
+                  <option value="">unknown</option>
+                  {["free", "freemium", "one-time", "subscription", "usage-based"].map((o) => <option key={o} value={o}>{o}</option>)}
+                </select>
+              </Field>
+              <Field label="Founder reach">
+                <select className="li-input" value={intake.founder_reach || ""} onChange={(e) => set("founder_reach", e.target.value)}>
+                  <option value="">unknown</option>
+                  {["low", "mid", "high"].map((o) => <option key={o} value={o}>{o}</option>)}
+                </select>
+              </Field>
             </div>
-
-            {/* override */}
-            <div className="mt-3 flex items-center gap-2">
-              <span className="text-[11.5px] text-muted">Not right?</span>
-              <select
-                className="li-input flex-1"
-                value={chosen || ""}
-                onChange={(e) => setOverride(e.target.value as LaunchArchetypeKey)}
-              >
-                {Object.entries(ARCHETYPE_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
-              </select>
+            <Field label="Audience"><input className="li-input" value={intake.audience_who || ""} onChange={(e) => set("audience_who", e.target.value)} /></Field>
+            <Field label="Primary artifact"><input className="li-input" value={intake.primary_artifact || ""} onChange={(e) => set("primary_artifact", e.target.value)} placeholder="(none)" /></Field>
+            <div className="grid grid-cols-2 gap-3">
+              <ToggleField label="Retention loop?" value={intake.has_retention_loop} onChange={(v) => set("has_retention_loop", v)} />
+              <ToggleField label="OG link unfurls?" value={intake.og_unfurl_works} onChange={(v) => set("og_unfurl_works", v)} />
             </div>
-          </section>
+            <Field label="Launch date"><input type="date" className="li-input" value={intake.launch_date || ""} onChange={(e) => set("launch_date", e.target.value)} /></Field>
+            <button
+              onClick={() => onIntake(intake)}
+              className="text-[11.5px] text-accent hover:opacity-80 btn-press"
+            >
+              Save details
+            </button>
+          </div>
+        )}
+      </div>
 
-          <button
-            onClick={() => chosen && onGeneratePlan(chosen)}
-            disabled={busy === "plan" || !chosen}
-            className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg font-medium text-[13px] btn-press disabled:opacity-50"
-            style={{ background: "var(--accent)", color: "var(--accent-fg)" }}
-          >
-            {busy === "plan" ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
-            Generate my Week-1 launch plan
-          </button>
-        </>
-      )}
+      <button
+        onClick={() => onGeneratePlan(chosen)}
+        disabled={busy === "plan"}
+        className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg font-medium text-[13px] btn-press disabled:opacity-50"
+        style={{ background: "var(--accent)", color: "var(--accent-fg)" }}
+      >
+        {busy === "plan" ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
+        {busy === "plan" ? "Building your Week-1 plan…" : "Generate my Week-1 plan"}
+      </button>
     </div>
   );
 }
@@ -398,36 +352,30 @@ function TrackBoard({
   const [plan, setPlan] = useState<LaunchPlan>(campaign.plan!);
   const [advice, setAdvice] = useState<LaunchAdvice | null>(null);
   const [adviceBusy, setAdviceBusy] = useState(false);
-  const [assetBusy, setAssetBusy] = useState<string | null>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const dayRefs = useRef<(HTMLDivElement | null)[]>([]);
 
-  // debounced server sync
-  const persist = useCallback(
-    (next: LaunchPlan) => {
-      setPlan(next);
-      if (saveTimer.current) clearTimeout(saveTimer.current);
-      saveTimer.current = setTimeout(() => {
-        api.updateLaunch(projectId, { plan: next }).then((r) => onCampaign(r.campaign)).catch(() => {});
-      }, 700);
-    },
-    [projectId, onCampaign],
-  );
+  useEffect(() => { setPlan(campaign.plan!); }, [campaign.plan]);
+
+  const persist = useCallback((next: LaunchPlan) => {
+    setPlan(next);
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(() => {
+      api.updateLaunch(projectId, { plan: next }).then((r) => onCampaign(r.campaign)).catch(() => {});
+    }, 700);
+  }, [projectId, onCampaign]);
 
   const score = useMemo(() => computeScore(plan), [plan]);
   const m = plan.metrics;
 
-  const mutateDay = (di: number, fn: (d: LaunchDay) => LaunchDay) => {
-    const next = { ...plan, days: plan.days.map((d, i) => (i === di ? fn(d) : d)) };
-    persist(next);
-  };
+  const mutateDay = (di: number, fn: (d: LaunchDay) => LaunchDay) =>
+    persist({ ...plan, days: plan.days.map((d, i) => (i === di ? fn(d) : d)) });
 
   const getMove = async () => {
     setAdviceBusy(true);
     try {
-      // ensure latest plan is saved before asking
       await api.updateLaunch(projectId, { plan });
-      const a = await api.trackLaunch(projectId);
-      setAdvice(a);
+      setAdvice(await api.trackLaunch(projectId));
     } catch (e) {
       toast.push({ kind: "error", title: "Couldn't get advice", detail: String((e as Error).message) });
     } finally {
@@ -435,38 +383,69 @@ function TrackBoard({
     }
   };
 
-  const genAsset = async (day: LaunchDay, target: TargetKind) => {
-    setAssetBusy(day.title);
+  const draftPiece = async (di: number, pi: number) => {
     try {
-      await api.generateLaunchAsset(projectId, target, `${day.channel}: ${day.title}`);
-      toast.push({
-        kind: "success",
-        title: "Drafting…",
-        detail: "The post will appear in your Actions feed shortly.",
-      });
+      const { piece } = await api.draftLaunchContent(projectId, di, pi);
+      // merge the drafted piece back into local plan
+      setPlan((prev) => ({
+        ...prev,
+        days: prev.days.map((d, i) =>
+          i === di ? { ...d, content_pieces: d.content_pieces.map((p, j) => (j === pi ? piece : p)) } : d,
+        ),
+      }));
+      toast.push({ kind: "success", title: "Draft ready", detail: "Also saved to your Actions feed." });
     } catch (e) {
-      toast.push({ kind: "error", title: "Couldn't start draft", detail: String((e as Error).message) });
-    } finally {
-      setTimeout(() => setAssetBusy(null), 1200);
+      toast.push({ kind: "error", title: "Draft failed", detail: String((e as Error).message) });
     }
   };
 
+  const setPieceVariant = (di: number, pi: number, vi: number) =>
+    mutateDay(di, (d) => ({
+      ...d,
+      content_pieces: d.content_pieces.map((p, j) => (j === pi ? { ...p, chosen_variant: vi } : p)),
+    }));
+
   return (
-    <div className="max-w-[860px] mx-auto px-6 py-6">
-      {/* summary strip */}
-      <div className="flex flex-wrap items-end gap-6 mb-5">
+    <div className="max-w-[900px] mx-auto px-6 py-6">
+      {/* summary */}
+      <div className="flex flex-wrap items-end gap-6 mb-4">
         <Stat big value={String(score.total_north)} label={`total ${m.north}`} />
         <Stat big value={score.k.toFixed(2)} label={`K (${m.loop}÷${m.north})`} tone={score.k >= 1 ? "good" : score.k > 0 ? "warn" : undefined} />
         <Stat big value={`${score.funnel_pct.toFixed(1)}%`} label="funnel" />
         <Stat big value={`${score.tasks_pct}%`} label={`${score.tasks_done}/${score.tasks_total} tasks`} />
         <div className="flex-1" />
-        <input
-          type="date"
-          className="li-input w-[150px]"
-          value={campaign.start_date || ""}
-          onChange={(e) => api.updateLaunch(projectId, { start_date: e.target.value }).then((r) => onCampaign(r.campaign))}
-          title="launch start date"
-        />
+        <div>
+          <div className="text-[9.5px] uppercase tracking-[0.1em] text-muted mb-1">launch date</div>
+          <input
+            type="date"
+            className="li-input w-[150px]"
+            value={campaign.start_date || ""}
+            onChange={(e) => api.updateLaunch(projectId, { start_date: e.target.value }).then((r) => onCampaign(r.campaign))}
+          />
+        </div>
+      </div>
+
+      {/* calendar strip */}
+      <div className="flex gap-1.5 mb-5 overflow-x-auto pb-1">
+        {plan.days.map((d, i) => {
+          const done = d.tasks.length > 0 && d.tasks.every((t) => t.done);
+          return (
+            <button
+              key={i}
+              onClick={() => dayRefs.current[i]?.scrollIntoView({ behavior: "smooth", block: "start" })}
+              className="shrink-0 px-2.5 py-1.5 rounded-lg border text-left btn-press"
+              style={{
+                borderColor: d.gate ? "var(--accent-strong)" : "var(--border-strong)",
+                background: done ? "var(--accent-soft)" : "var(--surface)",
+                minWidth: 78,
+              }}
+            >
+              <div className="text-[10px] uppercase tracking-wider text-muted font-mono">{dayLabel(d, i)}</div>
+              {d.date && <div className="text-[11px] font-medium tabular">{shortDate(d.date)}</div>}
+              <div className="text-[10px] text-muted truncate max-w-[90px]">{d.channel || "prep"}</div>
+            </button>
+          );
+        })}
       </div>
 
       {/* positioning + today's move */}
@@ -492,7 +471,6 @@ function TrackBoard({
             <>
               <div className="text-[13px] font-medium leading-snug">{advice.move}</div>
               {advice.rationale && <div className="text-[11.5px] text-fg-dim mt-1">{advice.rationale}</div>}
-              {advice.rule_fired && <div className="text-[10.5px] text-muted mt-1 font-mono">rule: {advice.rule_fired}</div>}
             </>
           ) : (
             <div className="text-[12px] text-muted">Fill in tonight&rsquo;s numbers, then ask Pulse what to do next.</div>
@@ -503,24 +481,20 @@ function TrackBoard({
       {/* day cards */}
       <div className="space-y-3">
         {plan.days.map((day, di) => (
-          <DayCard
-            key={di}
-            day={day}
-            metrics={m}
-            channels={plan.channels}
-            assetBusy={assetBusy === day.title}
-            onToggleTask={(ti) =>
-              mutateDay(di, (d) => ({ ...d, tasks: d.tasks.map((t, i) => (i === ti ? { ...t, done: !t.done } : t)) }))
-            }
-            onMetric={(key, val) =>
-              mutateDay(di, (d) => ({ ...d, metrics: { ...d.metrics, [key]: val } }))
-            }
-            onGenerate={genAsset}
-          />
+          <div key={di} ref={(el) => { dayRefs.current[di] = el; }}>
+            <DayCard
+              day={day}
+              dayIndex={di}
+              metrics={m}
+              onToggleTask={(ti) => mutateDay(di, (d) => ({ ...d, tasks: d.tasks.map((t, i) => (i === ti ? { ...t, done: !t.done } : t)) }))}
+              onMetric={(key, val) => mutateDay(di, (d) => ({ ...d, metrics: { ...d.metrics, [key]: val } }))}
+              onDraftPiece={(pi) => draftPiece(di, pi)}
+              onPickVariant={(pi, vi) => setPieceVariant(di, pi, vi)}
+            />
+          </div>
         ))}
       </div>
 
-      {/* guardrails + decision rules */}
       <details className="mt-5 rounded-xl border bg-surface" style={{ borderColor: "var(--border)" }}>
         <summary className="px-4 py-2.5 text-[12px] uppercase tracking-[0.12em] text-muted font-medium cursor-pointer select-none">
           Decision rules &amp; guardrails
@@ -546,82 +520,77 @@ function TrackBoard({
 
 function DayCard({
   day,
+  dayIndex,
   metrics,
-  channels,
-  assetBusy,
   onToggleTask,
   onMetric,
-  onGenerate,
+  onDraftPiece,
+  onPickVariant,
 }: {
   day: LaunchDay;
+  dayIndex: number;
   metrics: LaunchPlan["metrics"];
-  channels: LaunchPlan["channels"];
-  assetBusy: boolean;
   onToggleTask: (ti: number) => void;
   onMetric: (key: "visits" | "north" | "loop" | "referrer", val: string) => void;
-  onGenerate: (day: LaunchDay, target: TargetKind) => void;
+  onDraftPiece: (pi: number) => void;
+  onPickVariant: (pi: number, vi: number) => void;
 }) {
   const dayK = num(day.metrics.north) ? num(day.metrics.loop) / num(day.metrics.north) : 0;
   const dayF = num(day.metrics.visits) ? (num(day.metrics.north) / num(day.metrics.visits)) * 100 : 0;
-  // find a matching channel target for this day's channel
-  const channelTarget = channels.find((c) => c.name === day.channel || day.channel.includes(c.name))?.target;
 
   return (
-    <div
-      className="rounded-xl border bg-surface overflow-hidden"
-      style={{ borderColor: day.gate ? "var(--accent-strong)" : "var(--border)" }}
-    >
-      <div className="flex items-center gap-2.5 px-4 py-3" style={{ borderBottom: "1px solid var(--border)" }}>
-        <div className="text-[13.5px] font-semibold flex-1">{day.title}</div>
-        {day.channel && (
-          <span className="text-[10.5px] uppercase tracking-[0.14em] text-muted font-mono">{day.channel}</span>
-        )}
-        {channelTarget && (
-          <button
-            onClick={() => onGenerate(day, channelTarget)}
-            disabled={assetBusy}
-            className="flex items-center gap-1 text-[11px] px-2 py-1 rounded btn-press disabled:opacity-50"
-            style={{ background: "var(--accent-soft)", color: "var(--accent)", border: "1px solid var(--accent-strong)" }}
-            title={`draft a ${channelTarget.replace(/_/g, " ")}`}
-          >
-            {assetBusy ? <Loader2 size={10} className="animate-spin" /> : <Wand2 size={10} />}
-            Generate
-          </button>
-        )}
+    <div className="rounded-xl border bg-surface overflow-hidden scroll-mt-4" style={{ borderColor: day.gate ? "var(--accent-strong)" : "var(--border)" }}>
+      <div className="px-4 py-3" style={{ borderBottom: "1px solid var(--border)" }}>
+        <div className="flex items-center gap-2.5">
+          <div className="text-[13.5px] font-semibold flex-1">{day.title}</div>
+          {day.date && <span className="text-[11px] text-muted font-mono tabular">{shortDate(day.date)}</span>}
+          {day.channel && <span className="text-[10.5px] uppercase tracking-[0.14em] text-muted font-mono">{day.channel}</span>}
+        </div>
+        {day.goal && <div className="text-[12.5px] text-fg-dim mt-1.5"><span className="text-accent font-medium">Goal:</span> {day.goal}</div>}
+        {day.rationale && <div className="text-[11.5px] text-muted mt-1 leading-relaxed">{day.rationale}</div>}
       </div>
 
-      <ul className="px-4 py-2">
-        {day.tasks.map((t, ti) => (
-          <li key={ti} className="flex items-start gap-2.5 py-1.5">
-            <button
-              onClick={() => onToggleTask(ti)}
-              className="w-[17px] h-[17px] rounded flex items-center justify-center shrink-0 mt-0.5 btn-press"
-              style={{
-                border: "1px solid var(--border-strong)",
-                background: t.done ? "var(--accent)" : "transparent",
-                color: t.done ? "var(--accent-fg)" : "transparent",
-              }}
-              aria-pressed={t.done}
-            >
-              <Check size={11} />
-            </button>
-            <span className={`text-[13px] leading-snug ${t.done ? "line-through text-muted" : "text-fg-dim"}`}>{t.text}</span>
-          </li>
-        ))}
-      </ul>
+      {day.tasks.length > 0 && (
+        <ul className="px-4 py-2">
+          {day.tasks.map((t, ti) => (
+            <li key={ti} className="flex items-start gap-2.5 py-1.5">
+              <button
+                onClick={() => onToggleTask(ti)}
+                className="w-[17px] h-[17px] rounded flex items-center justify-center shrink-0 mt-0.5 btn-press"
+                style={{ border: "1px solid var(--border-strong)", background: t.done ? "var(--accent)" : "transparent", color: t.done ? "var(--accent-fg)" : "transparent" }}
+                aria-pressed={t.done}
+              >
+                <Check size={11} />
+              </button>
+              <span className={`text-[13px] leading-snug ${t.done ? "line-through text-muted" : "text-fg-dim"}`}>{t.text}</span>
+            </li>
+          ))}
+        </ul>
+      )}
 
-      {/* per-day metrics */}
+      {/* content pieces */}
+      {day.content_pieces.length > 0 && (
+        <div className="px-4 pb-3 space-y-2.5">
+          <div className="text-[10.5px] uppercase tracking-[0.14em] text-muted font-medium">Content to ship</div>
+          {day.content_pieces.map((piece, pi) => (
+            <ContentPieceCard
+              key={pi}
+              piece={piece}
+              onDraft={() => onDraftPiece(pi)}
+              onPickVariant={(vi) => onPickVariant(pi, vi)}
+            />
+          ))}
+        </div>
+      )}
+
+      {/* metrics */}
       <div className="grid grid-cols-4 gap-2 px-4 pb-3 pt-1" style={{ borderTop: "1px solid var(--border)" }}>
         <MetricInput label={metrics.visits} value={day.metrics.visits} onChange={(v) => onMetric("visits", v)} />
         <MetricInput label={metrics.north} value={day.metrics.north} onChange={(v) => onMetric("north", v)} />
         <MetricInput label={metrics.loop} value={day.metrics.loop} onChange={(v) => onMetric("loop", v)} />
         <div>
           <div className="text-[9.5px] uppercase tracking-[0.1em] text-muted mb-1">top referrer</div>
-          <input
-            className="li-input text-[12px] py-1"
-            value={day.metrics.referrer}
-            onChange={(e) => onMetric("referrer", e.target.value)}
-          />
+          <input className="li-input text-[12px] py-1" value={day.metrics.referrer} onChange={(e) => onMetric("referrer", e.target.value)} />
         </div>
       </div>
       {(num(day.metrics.north) > 0 || num(day.metrics.visits) > 0) && (
@@ -630,25 +599,112 @@ function DayCard({
           <span>funnel: <b className="text-fg">{dayF.toFixed(1)}%</b></span>
         </div>
       )}
+      <span className="hidden">{dayIndex}</span>
+    </div>
+  );
+}
+
+function ContentPieceCard({
+  piece,
+  onDraft,
+  onPickVariant,
+}: {
+  piece: LaunchContentPiece;
+  onDraft: () => void;
+  onPickVariant: (vi: number) => void;
+}) {
+  const toast = useToast();
+  const [busy, setBusy] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const content = piece.variants[piece.chosen_variant] ?? piece.variants[0] ?? "";
+  const openTo = CONTENT_OPEN[piece.kind];
+
+  const draft = async () => {
+    setBusy(true);
+    try { await onDraft(); } finally { setBusy(false); }
+  };
+
+  const copyAndOpen = async () => {
+    try { await navigator.clipboard.writeText(content); setCopied(true); setTimeout(() => setCopied(false), 1500); } catch {}
+    if (openTo.url) window.open(openTo.url, "_blank", "noopener,noreferrer");
+  };
+
+  return (
+    <div className="rounded-lg border" style={{ borderColor: "var(--border)", background: "var(--bg)" }}>
+      <div className="flex items-center gap-2 px-3 py-2" style={{ borderBottom: piece.status === "drafted" ? "1px solid var(--border)" : "none" }}>
+        <span
+          className="text-[10px] uppercase tracking-[0.1em] font-mono font-medium px-1.5 py-0.5 rounded"
+          style={{ background: "var(--elevated)", color: "var(--fg-dim)" }}
+        >
+          {CONTENT_LABEL[piece.kind]}
+        </span>
+        <span className="text-[12px] text-muted flex-1 truncate">{piece.brief}</span>
+        {piece.status === "idea" ? (
+          <button
+            onClick={draft}
+            disabled={busy}
+            className="flex items-center gap-1 text-[11px] px-2 py-1 rounded btn-press disabled:opacity-50 shrink-0"
+            style={{ background: "var(--accent-soft)", color: "var(--accent)", border: "1px solid var(--accent-strong)" }}
+          >
+            {busy ? <Loader2 size={10} className="animate-spin" /> : <Wand2 size={10} />}
+            {busy ? "Writing…" : "Write it"}
+          </button>
+        ) : (
+          <div className="flex items-center gap-1 shrink-0">
+            <button onClick={draft} disabled={busy} className="p-1 rounded hover:bg-white/5 text-muted btn-press" title="regenerate">
+              {busy ? <Loader2 size={11} className="animate-spin" /> : <RefreshCw size={11} />}
+            </button>
+            {openTo.url && (
+              <button
+                onClick={copyAndOpen}
+                className="flex items-center gap-1 text-[11px] px-2 py-1 rounded btn-press"
+                style={{ background: "var(--accent-soft)", color: "var(--accent)", border: "1px solid var(--accent-strong)" }}
+                title={`copy and ${openTo.label.toLowerCase()}`}
+              >
+                {copied ? <Check size={10} /> : <ExternalLink size={10} />}
+                {copied ? "Copied" : openTo.label}
+              </button>
+            )}
+            {!openTo.url && (
+              <button
+                onClick={async () => { try { await navigator.clipboard.writeText(content); setCopied(true); setTimeout(() => setCopied(false), 1500); toast.push({ kind: "success", title: "Copied" }); } catch {} }}
+                className="flex items-center gap-1 text-[11px] px-2 py-1 rounded btn-press"
+                style={{ background: "var(--accent-soft)", color: "var(--accent)", border: "1px solid var(--accent-strong)" }}
+              >
+                {copied ? <Check size={10} /> : <Copy size={10} />} {copied ? "Copied" : "Copy"}
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+
+      {piece.status === "drafted" && (
+        <div className="px-3 py-2.5">
+          {piece.variants.length > 1 && (
+            <div className="inline-flex p-0.5 rounded-md border bg-surface mb-2" style={{ borderColor: "var(--border-strong)" }}>
+              {piece.variants.map((_, vi) => (
+                <button
+                  key={vi}
+                  onClick={() => onPickVariant(vi)}
+                  className="px-2.5 py-0.5 rounded text-[11px] font-medium btn-press"
+                  style={{
+                    background: vi === piece.chosen_variant ? "var(--accent-soft)" : "transparent",
+                    color: vi === piece.chosen_variant ? "var(--accent)" : "var(--muted-strong)",
+                  }}
+                >
+                  {String.fromCharCode(65 + vi)}
+                </button>
+              ))}
+            </div>
+          )}
+          <div className="text-[13px] whitespace-pre-wrap leading-relaxed text-fg-dim">{content}</div>
+        </div>
+      )}
     </div>
   );
 }
 
 /* ── small pieces ──────────────────────────────────────────────────── */
-
-function SectionLabel({ n, title }: { n: number; title: string }) {
-  return (
-    <div className="flex items-center gap-2">
-      <span
-        className="w-5 h-5 rounded-full flex items-center justify-center text-[11px] font-mono font-medium"
-        style={{ background: "var(--accent-soft)", color: "var(--accent)" }}
-      >
-        {n}
-      </span>
-      <h3 className="text-[13px] font-semibold tracking-tight">{title}</h3>
-    </div>
-  );
-}
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -705,13 +761,7 @@ function MetricInput({ label, value, onChange }: { label: string; value: string;
   return (
     <div>
       <div className="text-[9.5px] uppercase tracking-[0.1em] text-muted mb-1">{label}</div>
-      <input
-        type="number"
-        min="0"
-        className="li-input text-[14px] py-1 tabular"
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-      />
+      <input type="number" min="0" className="li-input text-[14px] py-1 tabular" value={value} onChange={(e) => onChange(e.target.value)} />
     </div>
   );
 }
@@ -721,6 +771,19 @@ function MetricInput({ label, value, onChange }: { label: string; value: string;
 function num(v: string): number {
   const n = parseFloat(v);
   return isNaN(n) ? 0 : n;
+}
+
+function dayLabel(d: LaunchDay, i: number): string {
+  const m = d.title.match(/day\s*(\d+)/i);
+  return m ? `Day ${m[1]}` : `Day ${i}`;
+}
+
+function shortDate(iso: string): string {
+  try {
+    return new Date(iso + "T00:00:00").toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  } catch {
+    return iso;
+  }
 }
 
 function computeScore(plan: LaunchPlan) {

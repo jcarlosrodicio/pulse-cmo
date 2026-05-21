@@ -19,11 +19,19 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import date, timedelta
 from typing import Any
 
 import structlog
 
 from .llm import LLM, Message
+from .store import ActionStore
+from .tools.drafting import (
+    HUMAN_TONE_RULES,
+    STRICT_OUTPUT_RULES,
+    _brand_voice_block,
+    _draft_variants_with_llm,
+)
 
 log = structlog.get_logger()
 
@@ -245,6 +253,71 @@ def _archetype_facts(key: str) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# INTAKE — auto-inferred from what Pulse already knows.
+# ---------------------------------------------------------------------------
+
+async def infer_intake(
+    llm: LLM, *, project: dict[str, Any], product_info_md: str = ""
+) -> dict[str, Any]:
+    """Auto-fill the intake schema from the crawled product + product-info doc.
+
+    Pulse already crawled the site and (usually) wrote a Product Information
+    document during the first dive. Re-asking the founder for pricing /
+    audience / artifact is busywork — infer it, and only fall back to blanks
+    for things genuinely not knowable from the data.
+    """
+    system = (
+        "You extract launch-planning facts about a product from the material "
+        "provided. Output STRICT JSON only, no preface:\n"
+        "{\n"
+        '  "one_liner": "<what it does, one sentence>",\n'
+        '  "pricing": "free|freemium|one-time|subscription|usage-based|unknown",\n'
+        '  "has_retention_loop": true|false,\n'
+        '  "primary_artifact": "<the thing users produce/share, or empty string>",\n'
+        '  "audience_who": "<who it is for, short phrase>",\n'
+        '  "founder_can_produce": ["video"|"writing"|"design"|"code"],\n'
+        '  "founder_reach": "low|mid|high",\n'
+        '  "budget": "0|small|funded",\n'
+        '  "og_unfurl_works": true|false|null,\n'
+        '  "goal": "<the most likely launch goal: signups|cards|stars|installs|revenue|awareness>"\n'
+        "}\n"
+        "Infer aggressively but honestly. If pricing is unknown, say 'unknown'. "
+        "Default founder_reach to 'low' and budget to '0' for an indie unless "
+        "the material says otherwise. founder_can_produce: default to ['writing'] "
+        "if unknown. og_unfurl_works: null unless the material confirms it."
+    )
+    user = (
+        f"PRODUCT: {project.get('name')}\n"
+        f"URL: {project.get('url')}\n"
+        f"DESCRIPTION: {project.get('description') or '(none)'}\n"
+        f"COMPETITORS: {', '.join(project.get('competitors') or []) or '(none)'}\n"
+    )
+    if product_info_md:
+        user += f"\nPRODUCT INFORMATION DOCUMENT:\n{product_info_md[:4000]}\n"
+    user += "\nExtract the facts. Output only the JSON object."
+
+    base = default_intake(project)
+    try:
+        raw = await llm.complete(
+            [Message(role="system", content=system), Message(role="user", content=user)],
+            temperature=0.3,
+            max_tokens=600,
+        )
+    except Exception as e:
+        log.warning("infer_intake_failed", error=repr(e))
+        return base
+    parsed = _parse_json(raw) or {}
+    if isinstance(parsed, dict):
+        # merge inferred values over the blank defaults
+        for k, v in parsed.items():
+            if k in base and v not in (None, "", "unknown"):
+                base[k] = v
+            elif k == "og_unfurl_works":
+                base[k] = v
+    return base
+
+
+# ---------------------------------------------------------------------------
 # PLAN
 # ---------------------------------------------------------------------------
 
@@ -269,19 +342,29 @@ async def generate_launch_plan(
     system = (
         LAUNCH_SYSTEM
         + "\n\nProduce a Week-1 launch plan as STRICT JSON. The archetype is FIXED "
-        "(given below) — do not re-classify. Customize positioning, the channel "
-        "rationale, and the per-day task lists to THIS product. Tasks must be "
-        "concrete and shippable in under 2 hours each. Lead Day 0 with a "
-        "pre-launch gate (verify OG unfurl if it's a share product, verify the "
-        "north-star event fires, confirm a cold visitor sees something alive).\n\n"
+        "(given below) — do not re-classify. Customize everything to THIS product.\n\n"
+        "For EACH day produce:\n"
+        "  - goal: one crisp sentence — what success looks like that day\n"
+        "  - rationale: 1-2 sentences on WHY this channel/day in the sequence\n"
+        "  - tasks: 2-4 concrete steps, each shippable in under 2 hours\n"
+        "  - content_pieces: the actual posts to write that day. Each piece:\n"
+        "      kind: one of tweet|reddit_post|hn_post|linkedin|article (or omit\n"
+        "            content_pieces entirely for prep/video/PH days that have no\n"
+        "            text draft Pulse can write)\n"
+        "      brief: 1-2 sentences telling the writer the angle + key point\n"
+        "Day 0 is the pre-launch gate (verify OG unfurl if it's a share product,\n"
+        "verify the north-star event fires, confirm a cold visitor sees something\n"
+        "alive) — it has tasks but usually no content_pieces.\n\n"
         "OUTPUT JSON SHAPE (no preface, no fences):\n"
         "{\n"
         '  "positioning": { "tagline": "...", "one_liner": "...", "share_hook": "..." },\n'
         '  "channels": [ { "name": "...", "type": "repeatable|one_shot", "day": <int>, "why": "..." } ],\n'
         '  "days": [\n'
         '    { "title": "Day 0 — Pre-launch gate", "channel": "prep", "gate": true,\n'
-        '      "tasks": ["task", "task"] },\n'
-        '    { "title": "Day 1 — ...", "channel": "...", "gate": false, "tasks": ["..."] }\n'
+        '      "goal": "...", "rationale": "...", "tasks": ["task"], "content_pieces": [] },\n'
+        '    { "title": "Day 1 — ...", "channel": "...", "gate": false,\n'
+        '      "goal": "...", "rationale": "...", "tasks": ["..."],\n'
+        '      "content_pieces": [ { "kind": "reddit_post", "brief": "..." } ] }\n'
         "  ],\n"
         '  "decision_rules": ["if K high: ...", "if traffic high + conversion low: ...", "if quiet: ..."]\n'
         "}\n"
@@ -313,7 +396,7 @@ async def generate_launch_plan(
     raw = await llm.complete(
         [Message(role="system", content=system), Message(role="user", content=user)],
         temperature=0.6,
-        max_tokens=3000,
+        max_tokens=5000,
     )
     parsed = _parse_json(raw) or {}
 
@@ -333,7 +416,10 @@ async def generate_launch_plan(
             "title": str(d.get("title") or "Day"),
             "channel": str(d.get("channel") or ""),
             "gate": bool(d.get("gate")),
+            "goal": str(d.get("goal") or ""),
+            "rationale": str(d.get("rationale") or ""),
             "tasks": tasks,
+            "content_pieces": _norm_content_pieces(d.get("content_pieces")),
             "metrics": {"visits": "", "north": "", "loop": "", "referrer": ""},
         })
     if not days:
@@ -389,29 +475,194 @@ def _default_decision_rules(labels: dict[str, str]) -> list[str]:
     ]
 
 
+_CONTENT_KINDS = {"tweet", "reddit_post", "hn_post", "linkedin", "article"}
+
+
+def _norm_content_pieces(raw: Any) -> list[dict[str, Any]]:
+    """Normalize the LLM's content_pieces into the inline-draft shape."""
+    out: list[dict[str, Any]] = []
+    for p in raw or []:
+        if not isinstance(p, dict):
+            continue
+        kind = str(p.get("kind") or "").strip().lower()
+        if kind not in _CONTENT_KINDS:
+            continue
+        out.append({
+            "kind": kind,
+            "brief": str(p.get("brief") or ""),
+            "status": "idea",
+            "variants": [],
+            "chosen_variant": 0,
+            "action_id": None,
+        })
+    return out
+
+
+# map a channel's TargetKind to a launch content kind (the post you write)
+_TARGET_TO_CONTENT: dict[str | None, str | None] = {
+    "reddit_reply": "reddit_post",
+    "reddit_opportunity": "reddit_post",
+    "hn_post": "hn_post",
+    "hn_opportunity": "hn_post",
+    "linkedin": "linkedin",
+    "article": "article",
+    "tweet": "tweet",
+    None: None,
+}
+
+
 def _fallback_days(a: dict[str, Any]) -> list[dict[str, Any]]:
-    """Minimal Week-1 skeleton if the LLM plan parse fails."""
+    """Week-1 skeleton if the LLM plan parse fails — still content-rich so the
+    user can generate posts even on the fallback path."""
     chans = a["channels"]
     base = [
         {"title": "Day 0 — Pre-launch gate", "channel": "prep", "gate": True,
+         "goal": "Everything works; analytics fires; the page looks alive to a stranger.",
+         "rationale": "A broken funnel or dead-looking page wastes every channel that follows.",
          "tasks": [
              "Verify the product works end-to-end on mobile",
              "Confirm the north-star event fires in analytics",
              "Confirm a cold visitor sees something alive",
              "Build UTM links, one per channel",
-         ]},
+         ],
+         "content_pieces": []},
     ]
     for i, c in enumerate(chans[:7], start=1):
+        content_kind = _TARGET_TO_CONTENT.get(c.get("target"))
+        pieces = []
+        if content_kind:
+            pieces = [{
+                "kind": content_kind,
+                "brief": f"Launch post for {c['name']}: lead with the product's core hook, founder voice.",
+                "status": "idea",
+                "variants": [],
+                "chosen_variant": 0,
+                "action_id": None,
+            }]
         base.append({
             "title": f"Day {i} — {c['name']}",
             "channel": c["name"],
             "gate": False,
+            "goal": f"Get the first real traction from {c['name']}.",
+            "rationale": a["growth_engine"],
             "tasks": [f"Post to {c['name']} with the UTM link", "Reply to every comment within 3h"],
+            "content_pieces": pieces,
         })
     for d in base:
         d.setdefault("metrics", {"visits": "", "north": "", "loop": "", "referrer": ""})
         d["tasks"] = [{"text": t, "done": False} for t in d["tasks"]]
     return base
+
+
+# ---------------------------------------------------------------------------
+# CONTENT — inline, platform-specific, humanized launch posts.
+# Reuses the founder-voice drafting machinery (HUMAN_TONE_RULES + variants).
+# ---------------------------------------------------------------------------
+
+_PLATFORM_PROMPT: dict[str, str] = {
+    "tweet": (
+        "You write a launch tweet for an indie founder announcing this product.\n"
+        "One tweet. Hook-or-nothing first line. Sound like a real founder shipping,\n"
+        "not a brand account. Specific over generic."
+    ),
+    "reddit_post": (
+        "You write a Reddit self-post announcing/sharing this product. Story\n"
+        "format: what you built, why, what's rough, what you want feedback on.\n"
+        "Output as:\nTITLE: <title>\n\n<body>\nRedditors roast marketing speak —\n"
+        "be a human sharing a thing, not a launch announcement."
+    ),
+    "hn_post": (
+        "You write a Show HN post. Title under 80 chars, no clickbait, no\n"
+        "exclamation. Body: what it is, the honest why, what's still rough, one\n"
+        "concrete question. Output as:\nTITLE: <title>\n\n<body>"
+    ),
+    "linkedin": (
+        "You write a LinkedIn launch post. Founder voice, not consultant voice.\n"
+        "120-280 words, a hook first line, short paragraphs, end on a thought\n"
+        "not a CTA. No broetry, no '5 things I learned' format."
+    ),
+    "article": (
+        "You write a launch announcement / story article in clean markdown.\n"
+        "Candid, a little dry, occasionally funny. One H1, 3-5 H2 sections.\n"
+        "The real story of why this exists, not a press release."
+    ),
+}
+
+_KIND_TO_ACTION_TYPE: dict[str, str] = {
+    "tweet": "tweet",
+    "reddit_post": "reddit_reply",
+    "hn_post": "hn_post",
+    "linkedin": "linkedin",
+    "article": "article",
+}
+
+
+async def draft_launch_content(
+    llm: LLM,
+    store: ActionStore,
+    project_id: int,
+    *,
+    kind: str,
+    brief: str,
+    day_title: str = "",
+) -> dict[str, Any]:
+    """Generate 3 humanized, platform-specific variants for a launch content
+    piece. Saves an action (so it shows in the feed too) and returns the
+    variants for inline display on the launch board."""
+    if kind not in _PLATFORM_PROMPT:
+        raise ValueError(f"unsupported content kind '{kind}'")
+    project = store.get_project(project_id) or {}
+    bv = store.get_brand_voice(project_id)
+    bv_block = _brand_voice_block(bv)
+
+    system = (
+        _PLATFORM_PROMPT[kind]
+        + "\n\n" + HUMAN_TONE_RULES
+        + "\n\n" + STRICT_OUTPUT_RULES
+        + ("\n\n" + bv_block if bv_block else "")
+    )
+    user = (
+        f"PRODUCT: {project.get('name')} ({project.get('url')})\n"
+        f"WHAT IT DOES: {project.get('description') or '(none)'}\n"
+        f"LAUNCH DAY: {day_title or '(launch week)'}\n"
+        f"BRIEF FOR THIS POST: {brief or 'announce the launch in the product voice'}\n\n"
+        "Write it now."
+    )
+    variants = await _draft_variants_with_llm(
+        llm, system=system, user=user, n=3, temperature=0.9, max_tokens=2400
+    )
+    action_type = _KIND_TO_ACTION_TYPE[kind]
+    run_id = store.latest_run_id(project_id) or 0
+    title = f"Launch · {day_title}" if day_title else f"Launch {kind}"
+    action_id = store.create_action(
+        project_id=project_id,
+        run_id=run_id,
+        action_type=action_type,
+        title=title[:120],
+        content=variants[0],
+        context={"variants": variants, "chosen_variant": 0, "launch": True, "kind": kind},
+    )
+    return {"action_id": action_id, "variants": variants, "content": variants[0]}
+
+
+# ---------------------------------------------------------------------------
+# Calendar — map day index → real date from the launch start (Day 1 = launch).
+# ---------------------------------------------------------------------------
+
+def attach_dates(plan: dict[str, Any], start_date: str | None) -> dict[str, Any]:
+    """Annotate each day with a real ISO date derived from start_date.
+    Day 0 = start - 1 (pre-launch), Day 1 = start, etc. Non-mutating."""
+    if not start_date:
+        return plan
+    try:
+        d1 = date.fromisoformat(start_date)
+    except ValueError:
+        return plan
+    days = plan.get("days") or []
+    for i, day in enumerate(days):
+        # day index 0 is the pre-launch gate → the day before launch
+        day["date"] = (d1 + timedelta(days=i - 1)).isoformat()
+    return plan
 
 
 # ---------------------------------------------------------------------------

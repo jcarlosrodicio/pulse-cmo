@@ -223,6 +223,17 @@ export type LaunchArchetypeKey =
 
 export type LaunchTask = { text: string; done: boolean };
 
+export type LaunchContentKind = "tweet" | "reddit_post" | "hn_post" | "linkedin" | "article";
+
+export type LaunchContentPiece = {
+  kind: LaunchContentKind;
+  brief: string;
+  status: "idea" | "drafted";
+  variants: string[];
+  chosen_variant: number;
+  action_id: number | null;
+};
+
 export type LaunchDayMetrics = {
   visits: string;
   north: string;
@@ -234,7 +245,11 @@ export type LaunchDay = {
   title: string;
   channel: string;
   gate: boolean;
+  goal?: string;
+  rationale?: string;
+  date?: string;
   tasks: LaunchTask[];
+  content_pieces: LaunchContentPiece[];
   metrics: LaunchDayMetrics;
 };
 
@@ -585,7 +600,8 @@ export const api = {
     );
   },
   async startLaunch(projectId: number, intake?: LaunchIntake) {
-    return json<{ campaign: LaunchCampaign }>(
+    // auto-infers intake + classifies in one step
+    return json<{ classification: LaunchClassification; campaign: LaunchCampaign }>(
       await fetch(`${API}/projects/${projectId}/launch`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -636,6 +652,15 @@ export const api = {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ target, topic }),
+      }),
+    );
+  },
+  async draftLaunchContent(projectId: number, dayIndex: number, pieceIndex: number) {
+    return json<{ piece: LaunchContentPiece; day_index: number; piece_index: number }>(
+      await fetch(`${API}/projects/${projectId}/launch/draft`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ day_index: dayIndex, piece_index: pieceIndex }),
       }),
     );
   },

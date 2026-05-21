@@ -37,10 +37,13 @@ from .chat import expand_action_detail, stream_chat_reply
 from .llm import LLM, usage_scope
 from .log import setup_logging
 from .launch import (
+    attach_dates,
     classify_product,
     compute_scoreboard,
     default_intake,
+    draft_launch_content,
     generate_launch_plan,
+    infer_intake,
     launch_track_advice,
 )
 from .orchestrator import run_daily, run_first_dive, run_manual, run_targeted
@@ -155,6 +158,11 @@ class LaunchAsset(BaseModel):
         pattern="^(tweet|linkedin|hn_post|article|reddit_reply|reddit_opportunity|hn_opportunity)$"
     )
     topic: str = ""
+
+
+class LaunchDraft(BaseModel):
+    day_index: int
+    piece_index: int
 
 
 # --- run streaming infra ---------------------------------------------------
@@ -710,18 +718,37 @@ def create_app(config: Config) -> FastAPI:
             raise HTTPException(404, "project not found")
         return p
 
+    def _campaign_with_dates(project_id: int) -> dict | None:
+        c = store.get_launch_campaign(project_id)
+        if c and c.get("plan"):
+            attach_dates(c["plan"], c.get("start_date"))
+        return c
+
     @app.get("/projects/{project_id}/launch")
     async def get_launch(project_id: int) -> dict:
         _require_project(project_id)
-        campaign = store.get_launch_campaign(project_id)
-        return {"campaign": campaign}
+        return {"campaign": _campaign_with_dates(project_id)}
 
     @app.post("/projects/{project_id}/launch")
     async def start_launch(project_id: int, body: StartLaunch) -> dict:
+        """Start a launch: auto-infer intake from what Pulse already knows,
+        then classify — all in one step. The founder confirms, doesn't fill
+        out a form."""
         project = _require_project(project_id)
-        intake = body.intake or default_intake(project)
-        campaign = store.create_launch_campaign(project_id, state="intake", intake=intake)
-        return {"campaign": campaign}
+        if body.intake:
+            intake = body.intake
+        else:
+            doc = store.get_document_by_kind(project_id, "product_information")
+            product_md = (doc or {}).get("content_md", "") if doc else ""
+            async with usage_scope():
+                intake = await infer_intake(llm, project=project, product_info_md=product_md)
+        store.create_launch_campaign(project_id, state="intake", intake=intake)
+        async with usage_scope():
+            result = await classify_product(llm, project=project, intake=intake)
+        store.update_launch_campaign(
+            project_id, state="classify", archetype=result["archetype"], classification=result
+        )
+        return {"classification": result, "campaign": store.get_launch_campaign(project_id)}
 
     @app.patch("/projects/{project_id}/launch")
     async def update_launch(project_id: int, body: UpdateLaunch) -> dict:
@@ -729,8 +756,8 @@ def create_app(config: Config) -> FastAPI:
         if not store.get_launch_campaign(project_id):
             raise HTTPException(404, "no launch campaign — start one first")
         fields = {k: v for k, v in body.model_dump(exclude_none=True).items()}
-        campaign = store.update_launch_campaign(project_id, **fields)
-        return {"campaign": campaign}
+        store.update_launch_campaign(project_id, **fields)
+        return {"campaign": _campaign_with_dates(project_id)}
 
     @app.post("/projects/{project_id}/launch/classify")
     async def classify_launch(project_id: int) -> dict:
@@ -768,7 +795,40 @@ def create_app(config: Config) -> FastAPI:
         store.update_launch_campaign(
             project_id, state="active", archetype=body.archetype, plan=plan
         )
-        return {"plan": plan, "campaign": store.get_launch_campaign(project_id)}
+        return {"plan": plan, "campaign": _campaign_with_dates(project_id)}
+
+    @app.post("/projects/{project_id}/launch/draft")
+    async def launch_draft(project_id: int, body: LaunchDraft) -> dict:
+        """Generate the content for one day's content_piece inline, store the
+        variants back on the plan, and return the updated piece."""
+        _require_project(project_id)
+        campaign = store.get_launch_campaign(project_id)
+        if not campaign or not campaign.get("plan"):
+            raise HTTPException(404, "no launch plan yet")
+        plan = campaign["plan"]
+        days = plan.get("days") or []
+        if body.day_index < 0 or body.day_index >= len(days):
+            raise HTTPException(400, "bad day_index")
+        day = days[body.day_index]
+        pieces = day.get("content_pieces") or []
+        if body.piece_index < 0 or body.piece_index >= len(pieces):
+            raise HTTPException(400, "bad piece_index")
+        piece = pieces[body.piece_index]
+        async with usage_scope():
+            result = await draft_launch_content(
+                llm,
+                store,
+                project_id,
+                kind=piece["kind"],
+                brief=piece.get("brief", ""),
+                day_title=day.get("title", ""),
+            )
+        piece["status"] = "drafted"
+        piece["variants"] = result["variants"]
+        piece["chosen_variant"] = 0
+        piece["action_id"] = result["action_id"]
+        store.update_launch_campaign(project_id, plan=plan)
+        return {"piece": piece, "day_index": body.day_index, "piece_index": body.piece_index}
 
     @app.post("/projects/{project_id}/launch/track")
     async def track_launch(project_id: int) -> dict:
