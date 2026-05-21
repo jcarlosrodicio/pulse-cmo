@@ -23,3 +23,7 @@ node_modules/
 .DS_Store
 Thumbs.db
 
+
+# local-only design doc
+CMO-AGENT-LAUNCH-PLAYBOOK.md
+ai-growth-agent-spec.md

@@ -79,7 +79,7 @@ Pulse uses a 4-column layout on desktop:
 
 ```
 ┌──────────┬─────────────┬────────────────┬───────────────┐
-│ Company  │ Analytics   │ Actions Feed   │ Talk to CMO   │
+│ Company  │ Analytics   │ Actions Feed   │ Talk to Pulse │
 └──────────┴─────────────┴────────────────┴───────────────┘
 ```
 
@@ -101,10 +101,10 @@ Everything Pulse knows about your product.
 Five tabs:
 
 - **Health** *(default)* — on-page SEO score (0-100), severity breakdown (high/medium/low), and **PageSpeed gauges** (Performance / Accessibility / Best-practices / SEO, both mobile and desktop) once `check_pagespeed` has run. Also shows Core Web Vitals (LCP, FCP, CLS, TBT) and top opportunities from Lighthouse.
-- **Links** — coming soon (internal/external link health).
+- **Traction** — your **digital footprint**. Hit *Scan footprint* and Pulse searches the web, Reddit, and Hacker News for your product name + URL, classifies every mention by platform, and shows where you're strong, the sentiment, and a "where to focus" list. See §11.
 - **Technical** — signal list (sitemap, JSON-LD, HSTS, etc.) and findings with severity.
 - **AI / GEO** — coming soon (how ChatGPT / Claude / Perplexity cite your site).
-- **Checks** — every check that passes, grouped by category. The "12 passed" view in screenshots.
+- **Checks** — every check that passes, grouped by category.
 
 When data hasn't loaded yet, panels show shimmer skeletons. When the first dive completes, real data swaps in.
 
@@ -125,7 +125,11 @@ Everything Pulse has prepared for you to ship. Grouped into collapsible categori
 
 Filter by status: **Pending / Shipped / Dismissed / All**. Click any action to open its detail sheet.
 
-### Column 4 — Talk to AI CMO
+Each action group header also has a **+** button to **generate one more of that
+kind on demand** (a tweet, a Reddit reply, an article, an SEO audit…) without
+waiting for the next daily run. Type an optional topic and hit Generate.
+
+### Column 4 — Talk to Pulse
 
 A chat with the agent. Same tool registry as scheduled runs, so you can say:
 
@@ -151,11 +155,14 @@ For most actions you'll see:
 
 - **Channel pill** (SEO, Reddit, X, etc.)
 - **Title + metadata** (severity, age, source URL where applicable)
+- **A/B/C variants** — content drafts (tweets, Reddit replies, LinkedIn, HN, articles) come as three distinct variants. Tab between A / B / C; the one you pick becomes the saved content.
 - **Draft card** with the full content
   - **Copy** button — one-click clipboard
+  - **Copy & open post** (Reddit/HN) — copies the chosen variant and opens the platform's compose page
   - **Edit** button — inline editor for title + body, saves to the database
   - **Mark Complete** — moves it to Shipped
-- **Step-by-step guide** (for SEO / HN / Reddit / market gaps) — the agent generates a detailed remediation guide on demand. First open triggers generation; subsequent opens are instant from cache.
+- **Why this thread** callout (Reddit/HN) — the relevance reason + suggested angle the agent derived, shown above the draft.
+- **Step-by-step guide** (SEO fixes + positioning gaps) — the agent generates a detailed remediation guide on demand. First open triggers generation; subsequent opens are instant from cache.
 
 ### Copy-paste, not auto-post
 
@@ -221,11 +228,52 @@ Pulse runs once per day per project, in the background. Default 06:00 UTC.
 
 **Run now** in the header triggers a daily run on demand. **First dive** is only on a brand-new project; subsequent manual runs are daily-shaped.
 
-`g` from anywhere (outside a text field) triggers a run.
+`g` from anywhere (outside a text field) triggers a run. The **Run now** button
+is a split-button — the caret menu also has **Redo first dive** (a full re-scan).
 
 ---
 
-## 8. Keyboard shortcuts
+## 8. Launch mode
+
+Click **Launch** in the header to open the launch workspace — an archetype-driven
+go-to-market plan for a *new* product launch (distinct from ongoing daily ops).
+
+1. **Auto-classify** — Pulse reads everything it already knows (the crawl + the
+   Product Information doc) to infer pricing, audience, primary artifact,
+   retention loop, and OG-unfurl, then classifies the product into one of six
+   growth archetypes (viral-artifact, dev-tool, B2B SaaS, consumer, open-source,
+   marketplace). You confirm or override — no form to fill.
+2. **Week-1 plan** — the archetype fixes the channel sequence, north-star metric,
+   and anti-patterns; the model customizes positioning + a day-by-day board
+   (Day 0 pre-launch gate through Day 7). Each day has a goal, a rationale, tasks,
+   and the **actual posts to write** that day.
+3. **Generate content inline** — every content piece has a *Write it* button that
+   produces three humanized, platform-specific variants right in the card, with a
+   *Copy & open* button to the platform's compose page. Drafts also land in your
+   Actions feed.
+4. **Track** — a live tracker (mirrors a launch spreadsheet, server-synced): fill
+   in each day's numbers and the summary strip computes K-factor, funnel %, and
+   task completion. Hit **get move** for the single most important next action,
+   derived from the archetype's decision rules.
+
+---
+
+## 9. Settings → Providers
+
+Click your profile (top-right) → **Providers** to manage LLM providers without
+touching `config.yaml`:
+
+- Add / edit / remove any OpenAI-compatible provider (base URL, API key).
+- **Fetch models** pulls the provider's model list; **Test connection** verifies it.
+- Set each provider's **role** — primary, secondary (failover), vision, or fallback.
+- Set per-token pricing for cost tracking.
+
+Runtime edits persist to `~/.pulse/settings.json` and override the YAML. Your
+last run's cost + token count show in the profile pill.
+
+---
+
+## 10. Keyboard shortcuts
 
 | Shortcut    | Action                                |
 |-------------|---------------------------------------|
@@ -238,7 +286,32 @@ Pulse runs once per day per project, in the background. Default 06:00 UTC.
 
 ---
 
-## 9. Status pill + terminal
+## 11. Traction (digital footprint)
+
+The **Traction** tab (Site Analytics → Traction) maps where your company is
+talked about across the internet.
+
+Hit **Scan footprint** and Pulse:
+
+1. Derives search terms from your product name and URL (together and separate).
+2. Fans out parallel searches across the open web, Reddit, and Hacker News.
+3. Classifies every mention by platform (Reddit / HN / X / GitHub / Product Hunt /
+   LinkedIn / blogs / directories / web), dropping your own domain.
+4. Runs one synthesis pass that scores each platform's **strength**
+   (strong / emerging / thin / none), assesses sentiment, and produces 3-5
+   concrete **"where to focus"** insights.
+
+The result is your digital fingerprint: summary tiles (strongest platform, total
+mentions, sentiment), the insights, and one expandable card per platform listing
+the actual mentions (title, snippet, link, date, score). Rescan anytime.
+
+This is the "where are we already strong, where should we lean in" view — e.g.
+"you're strongest on Reddit in r/LocalLLaMA, double down there; no Hacker News
+presence yet, a Show HN could open a new audience."
+
+---
+
+## 12. Status pill + terminal
 
 The top-left has two pills:
 
@@ -260,7 +333,7 @@ This is the audit trail — what the agent did, what it found.
 
 ---
 
-## 10. Data + privacy
+## 13. Data + privacy
 
 Everything stays on your machine:
 
@@ -275,7 +348,7 @@ Wipe everything with `rm ~/.pulse/pulse.db`.
 
 ---
 
-## 11. The OpenAdapter cost story
+## 14. Models & cost
 
 Pulse routes every LLM call through OpenAdapter. The default chain is:
 
@@ -289,7 +362,7 @@ You can swap providers in `config.yaml` under `llm.providers` — any OpenAI-com
 
 ---
 
-## 12. Troubleshooting
+## 15. Troubleshooting
 
 **Onboarding says "backend unreachable"**
 Backend isn't running. Run `uv run pulse` from the repo root.
@@ -311,7 +384,7 @@ Check the scheduler. By default it's enabled in `config.yaml` (`scheduler.enable
 
 ---
 
-## 13. Tool inventory
+## 16. Tool inventory
 
 What's available to the agent today (21 tools):
 
@@ -329,26 +402,23 @@ What's available to the agent today (21 tools):
 
 ---
 
-## 14. Not yet built (per spec)
+## 17. Not yet built
 
 - Auto-posting (intentional — copy-paste only)
-- Google Analytics / Search Console OAuth
-- PostHog integration
+- Google Analytics / Search Console / PostHog integration (live launch-tracker numbers are entered manually for now)
 - Twitter mention search (paid API, deferred)
 - Multi-tenant teams + auth
-- Stripe checkout for paid tiers
 - Browser extension for one-click posting
-- A/B testing content variants
-
-If you ship paid users, the next things to wire are auth → Stripe → GA/GSC OAuth.
 
 ---
 
-## 15. Where to look in the code
+## 18. Where to look in the code
 
 - Backend agent loop → [src/pulse/agent.py](src/pulse/agent.py)
 - Tool registry + each tool → [src/pulse/tools/](src/pulse/tools/)
-- First-dive + daily prompts → [src/pulse/orchestrator.py](src/pulse/orchestrator.py)
+- First-dive + daily + targeted prompts → [src/pulse/orchestrator.py](src/pulse/orchestrator.py)
+- Launch mode (archetypes, plan, content) → [src/pulse/launch.py](src/pulse/launch.py)
+- Traction scan → [src/pulse/traction.py](src/pulse/traction.py)
 - HTTP API → [src/pulse/server.py](src/pulse/server.py)
 - Frontend dashboard glue → [web/src/app/page.tsx](web/src/app/page.tsx)
 - Per-panel components → [web/src/components/](web/src/components/)

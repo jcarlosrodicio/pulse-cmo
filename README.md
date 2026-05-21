@@ -1,146 +1,173 @@
+<div align="center">
+
 # Pulse
 
-> Daily heartbeat for your product. An AI growth agent for indie founders — wakes up every morning, audits your site, scans HN for opportunities, drafts content in your voice, and hands you a daily action list. You spend 10 minutes copy-pasting; the agent does the rest.
+**An open-source AI growth agent for indie founders.**
 
-Powered by [OpenAdapter](https://openadapter.dev) — runs on open-source models (MiniMax, GLM, DeepSeek) so a daily run costs cents, not dollars. Spec: [`ai-growth-agent-spec.md`](ai-growth-agent-spec.md).
+Pulse wakes up, audits your site, finds where you're being talked about, scans Reddit and Hacker News for openings, drafts content in a real founder voice, and hands you a short daily action list. You spend ten minutes shipping; the agent does the legwork.
 
-## Status
+Runs on OpenAI-compatible models, so a daily pass costs cents.
 
-MVP, end-to-end:
+</div>
 
-- ✅ Tool-calling agent loop with SSE streaming (ported from [`iris`](https://github.com/aruntemme/perso))
-- ✅ Multi-provider LLM with failover (MiniMax-M2.5 → GLM-5.1 → GLM-5, all via OpenAdapter)
-- ✅ 14 tools: `crawl_website`, `audit_seo`, `check_pagespeed`, `web_search`, `read_url`, `news_search`, `analyze_competitor`, `find_hn_opportunities`, `extract_brand_voice`, `draft_tweet`, `draft_hn_post`, `draft_linkedin_post`, `draft_article`, `generate_marketing_strategy`
-- ✅ First-dive orchestrator (initial product scan, 7+ actions in one run)
-- ✅ Daily orchestrator (recurring run, 3-5 fresh actions)
-- ✅ APScheduler for daily cron
-- ✅ SQLite store for projects / runs / actions
-- ✅ Next.js dashboard with live terminal-style agent log + action feed
-- ⏸ Reddit (intentionally deferred per the spec — copy-paste-only for MVP, and the prompt-engineering for non-spammy replies needs its own week)
-- ⏸ Google Analytics / Search Console OAuth, PostHog (Tier 2)
-- ⏸ Stripe / Auth / multi-tenant
+<p align="center">
+  <img src="docs/screenshots/dashboard.png" alt="Pulse dashboard" width="100%">
+</p>
+
+---
+
+## What it does
+
+Pulse is a self-hosted "AI CMO" for a single product (or several). Point it at a URL and it builds a working picture of the product, then keeps producing ready-to-ship marketing actions on a schedule.
+
+- **First dive** — crawls the site, audits SEO + PageSpeed, extracts brand voice, drafts starter content across channels, writes a Product Information doc, and scans Reddit/HN for openings.
+- **Daily runs** — a scheduled pass that surfaces 3-5 fresh, shippable actions.
+- **Founder-voice drafting** — tweets, LinkedIn posts, Hacker News posts, blog articles, and Reddit replies written to sound like a real founder: no em-dashes, no emojis, no marketing fluff. Each draft comes as 3 A/B/C variants.
+- **Smart Reddit discovery** — a 6-stage pipeline (profile → pain-point query plan → search → regex filter → LLM relevance verification → rank) that finds threads where your product genuinely fits, not just keyword matches.
+- **Traction** — maps your digital footprint: searches the web, Reddit, and HN for your name/URL, classifies every mention by platform, and tells you where you're strong and where to focus.
+- **Launch mode** — classifies your product into a growth archetype and generates an archetype-driven Week-1 launch plan, with a live tracker (K-factor, funnel %, daily "today's move") and the actual posts to write each day, generated inline.
+- **Per-channel generation** — a "+" on any action group to generate one tweet / Reddit reply / article / SEO audit on demand.
+- **Multi-provider LLM** — configure any OpenAI-compatible providers with automatic failover, primary/secondary/vision roles, and per-token cost tracking, all from a settings panel.
+
+## Screenshots
+
+| Dashboard | Launch mode |
+|---|---|
+| ![Dashboard](docs/screenshots/dashboard.png) | ![Launch mode](docs/screenshots/launch.png) |
+
+| Traction (digital footprint) | Action detail with A/B/C variants |
+|---|---|
+| ![Traction](docs/screenshots/traction.png) | ![Action detail](docs/screenshots/action-detail.png) |
 
 ## Quick start
 
+You'll need [uv](https://github.com/astral-sh/uv) (Python 3.12+) and Node 20+.
+
 ```bash
-# 1. install backend
+# 1. backend deps
 uv sync
-# (or:  uv venv && uv pip install -e .)
 
-# 2. env — copy and put your OpenAdapter key in .env
+# 2. configure — copy the example env and add an API key
 cp .env.example .env
+#   set OPENADAPTER_API_KEY (or edit config.yaml to point at any
+#   OpenAI-compatible provider — OpenAI, OpenRouter, Together, a local
+#   Ollama/vLLM endpoint, etc.)
 
-# 3. start backend
-uv run pulse
-# → http://127.0.0.1:8787
+# 3. run the backend
+uv run pulse                       # → http://127.0.0.1:8787
 
-# 4. start frontend (new terminal)
-cd web && npm install && npm run dev
-# → http://localhost:3030
+# 4. run the frontend (separate terminal)
+cd web && npm install && npm run dev   # → http://localhost:3030
 ```
 
-Open the frontend, enter a site URL, hit "First dive." Watch the agent crawl, audit, search HN, extract brand voice, and draft content live in the terminal log on the left; actions land on the right as they're generated.
+Open the dashboard, paste a product URL, and hit **First dive**. Watch the agent work live in the console; actions land in the feed as they're produced. You can also configure providers, run a traction scan, or open Launch mode from the header.
 
-## Architecture
+## Configuration
 
-```
-┌──────────────────────────────────────────────────────────────┐
-│  Next.js (React 19, Tailwind 4) — :3030                       │
-│  ├─ Onboarding (URL entry)                                    │
-│  ├─ Dashboard: terminal log (SSE) + actions feed              │
-│  └─ rewrites /api/* → backend                                 │
-└────────────────────────────┬─────────────────────────────────┘
-                             │
-                             ▼  REST + SSE
-┌──────────────────────────────────────────────────────────────┐
-│  FastAPI (Python 3.12) — :8787                                │
-│  ├─ /projects, /runs, /actions                                │
-│  ├─ /runs/{id}/stream  (SSE replayable via RunBroker)         │
-│  ├─ Agent loop (stream_chat → tool dispatch → loop)           │
-│  └─ APScheduler (daily cron per project)                      │
-└────────────────────────────┬─────────────────────────────────┘
-                             │
-              ┌──────────────┼────────────────┐
-              ▼              ▼                ▼
-        OpenAdapter      PageSpeed        HN Algolia
-       /v1/tools/*       Insights API     (free, public)
-       (search, scrape)
-              │
-              ▼
-      MiniMax-M2.5 → GLM-5.1 → GLM-5 (failover)
+Providers and scheduling live in [`config.yaml`](config.yaml); secrets live in `.env`.
+
+```yaml
+llm:
+  default_temperature: 0.6
+  providers:
+    - name: minimax
+      base_url: https://api.openadapter.in/v1
+      api_key_env: OPENADAPTER_API_KEY
+      model: MiniMax-M2.5
+      prompt_cost_per_million: 0.30        # for cost tracking only
+      completion_cost_per_million: 1.20
+    # add more — they're tried in order as failover
+
+scheduler:
+  enabled: true
+  daily_hour: 6        # local time for the daily run
+
+agent:
+  max_iterations: 28
 ```
 
-## Layout
+Providers can also be edited at runtime from the **Settings → Providers** panel in the UI (base URL, key, fetch available models, set primary/secondary/vision roles, test connection). Runtime edits are stored in `~/.pulse/settings.json` and override the YAML.
+
+Any OpenAI-compatible endpoint works. Pulse defaults to [OpenAdapter](https://openadapter.dev) because it serves open-source models (MiniMax, GLM, DeepSeek, Qwen, …) cheaply, but you can point it at OpenAI, OpenRouter, Together, Groq, or a local Ollama/vLLM server.
+
+## How it works
+
+```
+┌────────────────────────────────────────────────────────────────┐
+│  Next.js 16 · React 19 · Tailwind 4   — :3030                   │
+│  4-column dashboard · live agent console (SSE) · launch mode    │
+│  rewrites /api/* → backend                                      │
+└────────────────────────────┬────────────────────────────────────┘
+                             │ REST + SSE
+┌────────────────────────────▼────────────────────────────────────┐
+│  FastAPI · Python 3.12   — :8787                                │
+│  ├─ orchestrator: first_dive / daily / manual / targeted runs   │
+│  ├─ agent loop: stream tokens → dispatch tools → repeat         │
+│  ├─ launch + traction modules                                   │
+│  ├─ APScheduler (daily cron per project)                        │
+│  └─ SQLite store (projects, runs, actions, docs, launch)        │
+└────────────────────────────┬────────────────────────────────────┘
+              ┌──────────────┼───────────────┬──────────────┐
+              ▼              ▼               ▼              ▼
+        LLM provider     Web search /     Reddit JSON    HN Algolia
+        (failover)       scrape           (public)       (public)
+```
+
+The agent is a ReAct-style loop: the model streams a response, Pulse dispatches any tool calls, feeds results back, and repeats until the model stops or hits the iteration cap. Every tool is a plain async function with a typed signature; the `@tool` decorator turns its docstring + type hints into an OpenAI function schema.
+
+## Project layout
 
 ```
 pulse.cc/
-├── config.yaml              # providers, scheduler, agent settings
-├── pyproject.toml
+├── config.yaml                 # providers, scheduler, agent settings
 ├── src/pulse/
-│   ├── server.py            # FastAPI app, SSE, scheduler
-│   ├── config.py
-│   ├── llm.py               # multi-provider failover + retry
-│   ├── agent.py             # tool-calling loop with streaming
-│   ├── orchestrator.py      # first_dive / daily / manual run prompts
-│   ├── tools/
-│   │   ├── registry.py      # @tool decorator + schema gen (from iris)
-│   │   ├── web.py           # OpenAdapter web_search / read_url / news
-│   │   ├── crawl.py         # httpx + selectolax site crawler
-│   │   ├── seo.py           # audit_seo + check_pagespeed
-│   │   ├── discovery.py     # find_hn_opportunities
-│   │   ├── drafting.py      # draft_tweet / draft_article / log_*
-│   │   └── strategy.py      # brand_voice / marketing_strategy
-│   └── store/
-│       └── actions.py       # SQLite: projects, runs, actions
-└── web/
-    └── src/
-        ├── app/
-        │   ├── page.tsx     # onboarding ↔ dashboard
-        │   └── globals.css
-        ├── components/
-        │   ├── Onboarding.tsx
-        │   ├── Dashboard.tsx
-        │   ├── TerminalLog.tsx  # the "live agent" log
-        │   └── ActionCard.tsx   # one action with copy / ship / dismiss
-        └── lib/
-            └── api.ts       # typed client + SSE
+│   ├── server.py               # FastAPI app, SSE, scheduler, endpoints
+│   ├── llm.py                  # multi-provider failover + usage tracking
+│   ├── agent.py                # tool-calling loop with token streaming
+│   ├── orchestrator.py         # run prompts + targeted-run playbook
+│   ├── launch.py               # archetype table, plan + content generation
+│   ├── traction.py             # digital-footprint scan
+│   ├── chat.py                 # chat agent + doc regeneration
+│   ├── settings_store.py       # runtime provider config
+│   ├── tools/                  # crawl, seo, web, discovery, drafting, reddit, …
+│   └── store/actions.py        # SQLite, idempotent migrations
+└── web/src/
+    ├── app/                    # page, tokens.css (design system), globals
+    ├── components/             # layout, actions, analytics, launch, settings, chat
+    ├── hooks/useRunStream.ts   # SSE + polling fallback
+    └── lib/api.ts              # typed client
 ```
-
-## The OpenAdapter wedge
-
-Every tool the agent uses routes through the same OpenAdapter API key:
-
-- LLM calls: MiniMax-M2.5 (token-streams cleanly with tools), GLM-5.1 / GLM-5 as fallback.
-- Web tools: `POST /v1/tools/search`, `/v1/tools/scrape/markdown`, `/v1/tools/search/news`.
-
-This is the differentiator — a Pulse daily run costs ~$0.05-0.20 in tokens vs $1-5 for the same job on GPT-4o. Sustainable at $19/mo where Okara charges $99.
 
 ## Adding a tool
 
 ```python
 # src/pulse/tools/your_tool.py
-from .registry import Tool, tool
+from .registry import tool
 
 @tool
 async def my_tool(query: str, limit: int = 5) -> str:
-    """One-line description for the LLM.
+    """One-line description the model reads to decide when to call this.
 
     Args:
-        query: What to search.
-        limit: Max results.
+        query: What to search for.
+        limit: Max results (default 5).
     """
     ...
-    return "result string"
+    return "result string the model sees"
 ```
 
-Wire it into `orchestrator.build_registry_for_run` and (if relevant) reference it from the system prompt in `FIRST_DIVE_PROMPT` / `DAILY_PROMPT`.
+Register it in `orchestrator.build_registry_for_run` and reference it from the relevant run prompt.
 
-## What's next
+## Tech stack
 
-Per the spec, the path to "shippable to real users":
+- **Backend:** FastAPI, Python 3.12, SQLite, APScheduler, httpx, selectolax, tenacity
+- **Frontend:** Next.js 16, React 19, Tailwind 4, TypeScript
+- **Models:** any OpenAI-compatible chat-completions endpoint
 
-1. **Reddit replies** — proper anti-spam prompt + PRAW.
-2. **Auth + multi-tenant** (Supabase Auth or Clerk).
-3. **Stripe checkout** for paid tiers.
-4. **GA / Search Console / PostHog** integrations (OAuth flows).
-5. **Polished landing page** emphasizing the OpenAdapter cost story.
+## Contributing
+
+Issues and PRs welcome — see [CONTRIBUTING.md](CONTRIBUTING.md). The codebase is intentionally small and readable; a good first contribution is a new tool or a new launch archetype.
+
+## License
+
+[MIT](LICENSE) © 2026 Arun K
