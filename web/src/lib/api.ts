@@ -91,6 +91,7 @@ export type Project = {
   brand_voice: { tone?: string; vocabulary?: string; rhythm?: string; taboo?: string[] } | null;
   schedule_hour: number;
   schedule_minute: number;
+  schedule_times: string[] | null;
   timezone: string;
   writing_instructions: WritingInstructions | null;
   pagespeed_summary: PageSpeedSummary | null;
@@ -354,6 +355,32 @@ export type LaunchCampaign = {
   start_date: string | null;
   created_at: string;
   updated_at: string;
+};
+
+export type ProjectVersion = {
+  id: number;
+  project_id: number;
+  version_num: number;
+  run_id: number | null;
+  kind: string;
+  created_at: string;
+  summary_md: string;
+  snapshot: {
+    actions_total?: number;
+    actions_new?: number;
+    actions_by_type?: Record<string, number>;
+    seo_score?: number | null;
+    traction_mentions?: number | null;
+    traction_strongest?: string | null;
+    cost_usd?: number;
+    total_tokens?: number | null;
+    iterations?: number | null;
+    deltas?: {
+      actions_delta?: number;
+      seo_delta?: number | null;
+      traction_delta?: number | null;
+    };
+  };
 };
 
 export type LaunchScoreboard = {
@@ -700,6 +727,13 @@ export const api = {
   async deleteLaunch(projectId: number) {
     return json<{ ok: boolean }>(
       await fetch(`${API}/projects/${projectId}/launch`, { method: "DELETE" }),
+    );
+  },
+
+  // versions
+  async listVersions(projectId: number) {
+    return json<{ versions: ProjectVersion[] }>(
+      await fetch(`${API}/projects/${projectId}/versions`),
     );
   },
 

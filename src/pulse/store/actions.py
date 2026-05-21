@@ -92,6 +92,18 @@ CREATE TABLE IF NOT EXISTS documents (
     UNIQUE (project_id, kind)
 );
 
+CREATE TABLE IF NOT EXISTS project_versions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER NOT NULL,
+    version_num INTEGER NOT NULL,
+    run_id INTEGER,
+    kind TEXT,                    -- 'first_dive' | 'daily' | 'manual'
+    snapshot TEXT,                -- json: counts, seo score, traction, cost
+    summary_md TEXT,              -- LLM 'what changed since last version'
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (project_id) REFERENCES projects(id)
+);
+
 CREATE TABLE IF NOT EXISTS launch_campaigns (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     project_id INTEGER NOT NULL,
@@ -114,6 +126,7 @@ CREATE INDEX IF NOT EXISTS idx_sessions_project ON chat_sessions(project_id);
 CREATE INDEX IF NOT EXISTS idx_messages_session ON chat_messages(session_id);
 CREATE INDEX IF NOT EXISTS idx_documents_project ON documents(project_id);
 CREATE INDEX IF NOT EXISTS idx_launch_project ON launch_campaigns(project_id);
+CREATE INDEX IF NOT EXISTS idx_versions_project ON project_versions(project_id);
 """
 
 
@@ -131,6 +144,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
         ("projects", "pagespeed_summary", "TEXT"),
         ("projects", "seo_summary", "TEXT"),
         ("projects", "traction_summary", "TEXT"),
+        ("projects", "schedule_times", "TEXT"),
         ("actions", "detail_md", "TEXT"),
         ("agent_runs", "prompt_tokens", "INTEGER DEFAULT 0"),
         ("agent_runs", "completion_tokens", "INTEGER DEFAULT 0"),
@@ -191,7 +205,7 @@ class ActionStore:
             "schedule_minute",
             "timezone",
         }
-        json_fields = {"competitors", "writing_instructions", "pagespeed_summary", "seo_summary", "brand_voice"}
+        json_fields = {"competitors", "writing_instructions", "pagespeed_summary", "seo_summary", "brand_voice", "schedule_times"}
         sets, vals = [], []
         for k, v in fields.items():
             if k in scalar:
@@ -556,6 +570,52 @@ class ActionStore:
             )
             return int(cur.lastrowid)
 
+    # --- versions -----------------------------------------------------------
+
+    def create_version(
+        self,
+        project_id: int,
+        *,
+        run_id: int | None,
+        kind: str,
+        snapshot: dict[str, Any],
+        summary_md: str,
+    ) -> dict[str, Any]:
+        with self._lock, self._conn() as conn:
+            row = conn.execute(
+                "SELECT COALESCE(MAX(version_num), 0) AS m FROM project_versions WHERE project_id=?",
+                (project_id,),
+            ).fetchone()
+            version_num = int(row["m"]) + 1
+            cur = conn.execute(
+                "INSERT INTO project_versions (project_id, version_num, run_id, kind, snapshot, summary_md, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (project_id, version_num, run_id, kind, json.dumps(snapshot), summary_md, _now()),
+            )
+            vid = int(cur.lastrowid)
+        return self.get_version(vid)  # type: ignore[return-value]
+
+    def get_version(self, version_id: int) -> dict[str, Any] | None:
+        with self._conn() as conn:
+            row = conn.execute("SELECT * FROM project_versions WHERE id=?", (version_id,)).fetchone()
+        return _hydrate_version(row)
+
+    def list_versions(self, project_id: int, limit: int = 60) -> list[dict[str, Any]]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM project_versions WHERE project_id=? ORDER BY version_num DESC LIMIT ?",
+                (project_id, limit),
+            ).fetchall()
+        return [v for v in (_hydrate_version(r) for r in rows) if v is not None]
+
+    def latest_version(self, project_id: int) -> dict[str, Any] | None:
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT * FROM project_versions WHERE project_id=? ORDER BY version_num DESC LIMIT 1",
+                (project_id,),
+            ).fetchone()
+        return _hydrate_version(row)
+
     # --- launch campaigns ---------------------------------------------------
 
     def get_launch_campaign(self, project_id: int) -> dict[str, Any] | None:
@@ -624,6 +684,13 @@ def _hydrate_project(row: sqlite3.Row | None) -> dict[str, Any] | None:
     )
     d["seo_summary"] = json.loads(d["seo_summary"]) if d.get("seo_summary") else None
     d["traction_summary"] = json.loads(d["traction_summary"]) if d.get("traction_summary") else None
+    d["schedule_times"] = json.loads(d["schedule_times"]) if d.get("schedule_times") else None
+    # back-compat: derive schedule_times from hour/minute if not set
+    if not d["schedule_times"]:
+        h = d.get("schedule_hour")
+        m = d.get("schedule_minute")
+        if h is not None:
+            d["schedule_times"] = [f"{int(h):02d}:{int(m or 0):02d}"]
     return d
 
 
@@ -646,6 +713,14 @@ def _hydrate_document(row: sqlite3.Row | None) -> dict[str, Any] | None:
         return None
     d = dict(row)
     d["metadata"] = json.loads(d["metadata"]) if d.get("metadata") else {}
+    return d
+
+
+def _hydrate_version(row: sqlite3.Row | None) -> dict[str, Any] | None:
+    if not row:
+        return None
+    d = dict(row)
+    d["snapshot"] = json.loads(d["snapshot"]) if d.get("snapshot") else {}
     return d
 
 

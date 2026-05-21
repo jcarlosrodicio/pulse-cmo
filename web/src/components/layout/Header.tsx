@@ -10,6 +10,7 @@ import {
   RotateCcw,
   Sparkles,
   Rocket,
+  History,
 } from "lucide-react";
 import type { Project, AgentEvent } from "@/lib/api";
 import { TerminalBar, type TerminalState } from "./TerminalBar";
@@ -31,6 +32,7 @@ export function Header({
   onRedoFirstDive,
   onOpenProviderSettings,
   onOpenLaunch,
+  onOpenVersions,
   onToggleMobileNav,
   runStatus,
   lastRunCostUsd,
@@ -50,6 +52,7 @@ export function Header({
   onRedoFirstDive: () => void;
   onOpenProviderSettings: () => void;
   onOpenLaunch: () => void;
+  onOpenVersions: () => void;
   onToggleMobileNav?: () => void;
   runStatus: "idle" | "running" | "done";
   lastRunCostUsd?: number | null;
@@ -114,6 +117,14 @@ export function Header({
           onRedoFirstDive={onRedoFirstDive}
         />
 
+        <button
+          onClick={onOpenVersions}
+          className="hidden md:flex p-1.5 rounded hover:bg-white/5 text-muted-strong"
+          aria-label="version history"
+          title="version history"
+        >
+          <History size={15} />
+        </button>
         <a
           href={project.url}
           target="_blank"

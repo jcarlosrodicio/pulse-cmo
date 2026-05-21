@@ -51,6 +51,7 @@ from .orchestrator import run_daily, run_first_dive, run_manual, run_targeted
 from .settings_store import SettingsStore
 from .store import ActionStore
 from .traction import scan_traction
+from .versioning import create_version
 
 log = structlog.get_logger()
 
@@ -71,6 +72,7 @@ class UpdateProject(BaseModel):
     competitors: list[str] | None = None
     schedule_hour: int | None = None
     schedule_minute: int | None = None
+    schedule_times: list[str] | None = None   # ["06:00"] or ["06:00","18:00"]
     timezone: str | None = None
     writing_instructions: dict[str, Any] | None = None
 
@@ -308,6 +310,14 @@ async def _execute_run(
                 tokens=tracker.total_tokens,
                 cost_usd=round(tracker.cost_usd, 6),
             )
+            # snapshot a version after a successful first dive / daily run
+            if status == "done" and kind in ("first_dive", "daily"):
+                try:
+                    await create_version(
+                        store=store, llm=llm, project_id=project_id, run_id=run_id, kind=kind
+                    )
+                except Exception:
+                    log.exception("version_create_failed", run_id=run_id)
 
 
 # --- app -------------------------------------------------------------------
@@ -341,24 +351,34 @@ def create_app(config: Config) -> FastAPI:
             kind="daily",
         )
 
-    def _schedule_daily(project_id: int, hour: int, minute: int) -> None:
-        scheduler.add_job(
-            _daily_for_project,
-            CronTrigger(hour=hour, minute=minute),
-            args=[project_id],
-            id=f"daily-{project_id}",
-            replace_existing=True,
-        )
+    def _schedule_project(project_id: int) -> None:
+        """(Re)register one cron job per configured run time for a project."""
+        # clear any existing jobs for this project
+        for job in scheduler.get_jobs():
+            if job.id and job.id.startswith(f"daily-{project_id}"):
+                scheduler.remove_job(job.id)
+        proj = store.get_project(project_id) or {}
+        times = proj.get("schedule_times")
+        if not times:
+            times = [f"{config.scheduler.daily_hour:02d}:{config.scheduler.daily_minute:02d}"]
+        for i, t in enumerate(times):
+            try:
+                hh, mm = (int(x) for x in str(t).split(":")[:2])
+            except (ValueError, TypeError):
+                continue
+            scheduler.add_job(
+                _daily_for_project,
+                CronTrigger(hour=hh, minute=mm),
+                args=[project_id],
+                id=f"daily-{project_id}-{i}",
+                replace_existing=True,
+            )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         if config.scheduler.enabled:
             for proj in store.list_projects():
-                _schedule_daily(
-                    proj["id"],
-                    int(proj.get("schedule_hour") or config.scheduler.daily_hour),
-                    int(proj.get("schedule_minute") or config.scheduler.daily_minute),
-                )
+                _schedule_project(proj["id"])
             scheduler.start()
             log.info("scheduler_started", jobs=len(scheduler.get_jobs()))
         yield
@@ -402,7 +422,7 @@ def create_app(config: Config) -> FastAPI:
             name=derived_name, url=url, description=body.description
         )
         if config.scheduler.enabled:
-            _schedule_daily(pid, config.scheduler.daily_hour, config.scheduler.daily_minute)
+            _schedule_project(pid)
 
         run_id: int | None = None
         if body.start_dive:
@@ -458,14 +478,11 @@ def create_app(config: Config) -> FastAPI:
             **{k: v for k, v in body.model_dump(exclude_none=True).items()},
         )
         if config.scheduler.enabled and (
-            body.schedule_hour is not None or body.schedule_minute is not None
+            body.schedule_hour is not None
+            or body.schedule_minute is not None
+            or body.schedule_times is not None
         ):
-            updated = store.get_project(project_id)
-            _schedule_daily(
-                project_id,
-                int(updated.get("schedule_hour") or config.scheduler.daily_hour),
-                int(updated.get("schedule_minute") or config.scheduler.daily_minute),
-            )
+            _schedule_project(project_id)
         return store.get_project(project_id)
 
     # --- runs --------------------------------------------------------------
@@ -900,6 +917,13 @@ def create_app(config: Config) -> FastAPI:
     async def get_traction(project_id: int) -> dict:
         p = _require_project(project_id)
         return {"traction": p.get("traction_summary")}
+
+    # --- versions ----------------------------------------------------------
+
+    @app.get("/projects/{project_id}/versions")
+    async def list_versions(project_id: int) -> dict:
+        _require_project(project_id)
+        return {"versions": store.list_versions(project_id)}
 
     return app
 

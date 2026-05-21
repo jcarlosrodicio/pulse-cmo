@@ -24,6 +24,7 @@ import { ChatPanel } from "@/components/chat/ChatPanel";
 import { WritingInstructionsModal } from "@/components/settings/WritingInstructions";
 import { SettingsSheet } from "@/components/settings/SettingsSheet";
 import { LaunchWorkspace } from "@/components/launch/LaunchWorkspace";
+import { VersionsSheet } from "@/components/versions/VersionsSheet";
 import { KeyboardShortcuts } from "@/components/ui/KeyboardShortcuts";
 import { useToast } from "@/components/ui/Toast";
 import { useRunStream } from "@/hooks/useRunStream";
@@ -182,6 +183,7 @@ function Dashboard({
   const [showWritingModal, setShowWritingModal] = useState(false);
   const [showProviderSettings, setShowProviderSettings] = useState(false);
   const [showLaunch, setShowLaunch] = useState(false);
+  const [showVersions, setShowVersions] = useState(false);
   const [showShortcuts, setShowShortcuts] = useState(false);
   const [generatingTarget, setGeneratingTarget] = useState<TargetKind | null>(null);
   const [mobilePane, setMobilePane] = useState<"company" | "analytics" | "actions" | "chat">("actions");
@@ -334,6 +336,12 @@ function Dashboard({
     logConsole("result", "✓ writing instructions saved");
   };
 
+  const saveSchedule = async (times: string[]) => {
+    await api.updateProject(project.id, { schedule_times: times });
+    refreshActiveProject();
+    logConsole("result", `✓ schedule updated · ${times.join(", ")}`);
+  };
+
   // when isStreaming flips back to false, clear the generating flag.
   useEffect(() => {
     if (!isStreaming) setGeneratingTarget(null);
@@ -403,6 +411,7 @@ function Dashboard({
         }}
         onOpenProviderSettings={() => setShowProviderSettings(true)}
         onOpenLaunch={() => setShowLaunch(true)}
+        onOpenVersions={() => setShowVersions(true)}
         onToggleMobileNav={() => setMobilePane("company")}
         runStatus={runStatus}
         lastRunCostUsd={lastRunCostUsd}
@@ -469,6 +478,7 @@ function Dashboard({
         onClose={() => setShowWritingModal(false)}
         project={project}
         onSave={saveWritingInstructions}
+        onSaveSchedule={saveSchedule}
       />
 
       <SettingsSheet
@@ -484,6 +494,12 @@ function Dashboard({
           setShowLaunch(false);
           refreshActions();
         }}
+      />
+
+      <VersionsSheet
+        projectId={project.id}
+        open={showVersions}
+        onClose={() => setShowVersions(false)}
       />
 
       <KeyboardShortcuts open={showShortcuts} onClose={() => setShowShortcuts(false)} />

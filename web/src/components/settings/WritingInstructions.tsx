@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Save, Calendar, Plus, X, SlidersHorizontal } from "lucide-react";
+import { Save, Calendar, Plus, X, SlidersHorizontal, Clock } from "lucide-react";
 import { Sheet } from "../ui/Sheet";
 import { ChannelIcon } from "../ui/ChannelIcon";
 import type { Project, WritingInstructions as WI } from "@/lib/api";
@@ -19,23 +19,28 @@ export function WritingInstructionsModal({
   onClose,
   project,
   onSave,
+  onSaveSchedule,
 }: {
   open: boolean;
   onClose: () => void;
   project: Project;
   onSave: (wi: WI) => Promise<void>;
+  onSaveSchedule?: (times: string[]) => Promise<void>;
 }) {
   const [wi, setWi] = useState<WI>({});
+  const [times, setTimes] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     setWi(project.writing_instructions || {});
-  }, [project.writing_instructions, open]);
+    setTimes(project.schedule_times && project.schedule_times.length ? project.schedule_times : ["06:00"]);
+  }, [project.writing_instructions, project.schedule_times, open]);
 
   const save = async () => {
     setSaving(true);
     try {
       await onSave(wi);
+      if (onSaveSchedule) await onSaveSchedule(times);
       onClose();
     } finally {
       setSaving(false);
@@ -74,6 +79,11 @@ export function WritingInstructionsModal({
       </header>
 
       <div className="flex-1 overflow-y-auto px-5 py-5 space-y-6">
+        {/* run schedule */}
+        {onSaveSchedule && <ScheduleSection times={times} onChange={setTimes} />}
+
+        <Divider />
+
         {/* daily SEO fixes toggle */}
         <ToggleRow
           icon={<Calendar size={14} className="text-accent" />}
@@ -180,6 +190,85 @@ export function WritingInstructionsModal({
 
 function Divider() {
   return <div style={{ borderTop: "1px solid var(--border)" }} />;
+}
+
+const DEFAULT_TIMES: Record<string, string[]> = {
+  once: ["06:00"],
+  twice: ["06:00", "18:00"],
+};
+
+function ScheduleSection({ times, onChange }: { times: string[]; onChange: (t: string[]) => void }) {
+  const freq = times.length <= 1 ? "once" : times.length === 2 ? "twice" : "custom";
+  const set = (i: number, v: string) => onChange(times.map((t, j) => (j === i ? v : t)));
+
+  return (
+    <div>
+      <div className="flex items-center gap-2 mb-2.5">
+        <Clock size={14} className="text-accent" />
+        <h3 className="text-[13.5px] font-medium">Run schedule</h3>
+      </div>
+      <p className="text-[11.5px] text-muted mb-3">
+        When the daily pass fires. Each run snapshots a new version with a day-over-day summary.
+      </p>
+      <div className="flex gap-1.5 mb-3">
+        {([
+          { id: "once", label: "Once a day" },
+          { id: "twice", label: "Twice a day" },
+          { id: "custom", label: "Custom" },
+        ] as const).map((o) => (
+          <button
+            key={o.id}
+            onClick={() => {
+              if (o.id === "custom") {
+                if (times.length < 2) onChange([...times, "12:00"]);
+              } else {
+                onChange(DEFAULT_TIMES[o.id]);
+              }
+            }}
+            className="px-2.5 py-1.5 rounded text-[12px] font-medium btn-press"
+            style={{
+              background: freq === o.id ? "var(--accent-soft)" : "var(--surface)",
+              color: freq === o.id ? "var(--accent)" : "var(--muted-strong)",
+              border: `1px solid ${freq === o.id ? "var(--accent-strong)" : "var(--border-strong)"}`,
+            }}
+          >
+            {o.label}
+          </button>
+        ))}
+      </div>
+      <div className="space-y-2">
+        {times.map((t, i) => (
+          <div key={i} className="flex items-center gap-2">
+            <input
+              type="time"
+              value={t}
+              onChange={(e) => set(i, e.target.value)}
+              className="bg-surface border rounded-lg px-2.5 py-1.5 text-[13px] font-mono tabular"
+              style={{ borderColor: "var(--border-strong)" }}
+            />
+            <span className="text-[11px] text-muted">run #{i + 1}</span>
+            {times.length > 1 && (
+              <button
+                onClick={() => onChange(times.filter((_, j) => j !== i))}
+                className="p-1 rounded hover:bg-white/5 text-muted"
+                aria-label="remove time"
+              >
+                <X size={12} />
+              </button>
+            )}
+          </div>
+        ))}
+        {times.length < 4 && (
+          <button
+            onClick={() => onChange([...times, "12:00"])}
+            className="flex items-center gap-1 text-[11.5px] text-accent hover:opacity-80 btn-press"
+          >
+            <Plus size={11} /> add a run time
+          </button>
+        )}
+      </div>
+    </div>
+  );
 }
 
 function ToggleRow({
