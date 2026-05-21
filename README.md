@@ -2,7 +2,7 @@
 
 # Pulse
 
-**An open-source AI growth agent for indie founders.**
+**An open-source AI growth agent (CMO) for indie founders.**
 
 Pulse wakes up, audits your site, finds where you're being talked about, scans Reddit and Hacker News for openings, drafts content in a real founder voice, and hands you a short daily action list. You spend ten minutes shipping; the agent does the legwork.
 
