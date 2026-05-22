@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
 from urllib.parse import urljoin, urlparse
 
@@ -21,6 +22,83 @@ log = structlog.get_logger()
 
 USER_AGENT = "pulse-bot/0.1 (+https://pulse.cc)"
 HEADERS = {"User-Agent": USER_AGENT, "Accept": "text/html,application/xhtml+xml"}
+
+
+# --- GitHub repos ----------------------------------------------------------
+
+_GITHUB_RE = re.compile(r"^https?://(www\.)?github\.com/([^/\s]+)/([^/\s?#]+)", re.I)
+_RESERVED = {"features", "topics", "trending", "marketplace", "sponsors", "about",
+             "pricing", "explore", "settings", "orgs", "apps", "collections"}
+
+
+def _github_repo(url: str) -> tuple[str, str] | None:
+    """Return (owner, repo) if url is a github.com/owner/repo, else None."""
+    m = _GITHUB_RE.match(url)
+    if not m:
+        return None
+    owner, repo = m.group(2), m.group(3)
+    if owner.lower() in _RESERVED:
+        return None
+    return owner, repo.removesuffix(".git")
+
+
+async def _fetch_github_repo(client: httpx.AsyncClient, owner: str, repo: str) -> dict:
+    """Pull clean repo metadata + README via the GitHub API (no auth needed for
+    public repos; uses GITHUB_TOKEN if set for a higher rate limit)."""
+    headers = {
+        "User-Agent": USER_AGENT,
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    token = os.getenv("GITHUB_TOKEN")
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+
+    api = f"https://api.github.com/repos/{owner}/{repo}"
+    try:
+        r = await client.get(api, headers=headers, timeout=15.0, follow_redirects=True)
+    except Exception as e:
+        return {"ok": False, "error": f"github api fetch failed: {e}"}
+    if r.status_code == 404:
+        return {"ok": False, "error": "repo not found", "not_repo": True}
+    if r.status_code >= 400:
+        return {"ok": False, "error": f"github api returned {r.status_code}"}
+    data = r.json()
+
+    # README (raw)
+    readme = ""
+    try:
+        rr = await client.get(
+            f"{api}/readme",
+            headers={**headers, "Accept": "application/vnd.github.raw+json"},
+            timeout=15.0,
+            follow_redirects=True,
+        )
+        if rr.status_code == 200:
+            readme = rr.text
+    except Exception:
+        pass
+    # strip markdown noise + badges, keep prose
+    readme_text = re.sub(r"!\[[^\]]*\]\([^)]*\)", "", readme)        # images/badges
+    readme_text = re.sub(r"<[^>]+>", " ", readme_text)               # html tags
+    readme_text = re.sub(r"\s+", " ", readme_text).strip()[:5000]
+
+    return {
+        "ok": True,
+        "kind": "github_repo",
+        "full_name": data.get("full_name"),
+        "name": data.get("name"),
+        "description": data.get("description") or "",
+        "homepage": (data.get("homepage") or "").strip(),
+        "topics": data.get("topics") or [],
+        "language": data.get("language"),
+        "stars": data.get("stargazers_count"),
+        "forks": data.get("forks_count"),
+        "open_issues": data.get("open_issues_count"),
+        "license": (data.get("license") or {}).get("spdx_id"),
+        "html_url": data.get("html_url"),
+        "readme_excerpt": readme_text,
+    }
 
 
 async def _fetch(client: httpx.AsyncClient, url: str) -> str:
@@ -114,6 +192,39 @@ async def crawl_website(url: str, max_pages: int = 10) -> str:
     max_pages = max(1, min(int(max_pages), 20))
     if not url.startswith("http"):
         url = "https://" + url
+
+    # GitHub repo? pull clean metadata + README via the API instead of
+    # scraping the JS-heavy repo page (and crawling issues/commits).
+    gh = _github_repo(url)
+    if gh:
+        async with httpx.AsyncClient() as client:
+            repo = await _fetch_github_repo(client, *gh)
+        if repo.get("ok"):
+            return json.dumps({
+                "ok": True,
+                "site": url,
+                "source": "github",
+                "pages_fetched": 1,
+                "repo": {k: v for k, v in repo.items() if k not in ("ok", "kind")},
+                # synthesize a page so downstream brand-voice / product-info
+                # extraction has familiar fields to work with
+                "pages": [{
+                    "url": url,
+                    "meta": {
+                        "title": repo.get("full_name"),
+                        "description": repo.get("description"),
+                        "h1": repo.get("name"),
+                    },
+                    "excerpt": (
+                        f"{repo.get('description') or ''}\n\n"
+                        f"Language: {repo.get('language')} · {repo.get('stars')} stars · "
+                        f"license: {repo.get('license') or 'n/a'} · "
+                        f"topics: {', '.join(repo.get('topics') or []) or 'none'}\n\n"
+                        f"README:\n{repo.get('readme_excerpt') or ''}"
+                    ),
+                }],
+            }, ensure_ascii=False)[:12000]
+        # if it wasn't actually a repo, fall through to a normal crawl
 
     async with httpx.AsyncClient() as client:
         home_html = await _fetch(client, url)

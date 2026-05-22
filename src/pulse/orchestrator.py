@@ -42,7 +42,10 @@ EXECUTE IN ORDER. Do NOT skip the drafting steps (5-7) — they're the user's
 core value.
 
 1. CRAWL with `crawl_website` (max_pages=10). Extract product, audience, pricing,
-   tone.
+   tone. If the URL is a GitHub repo, crawl_website returns clean repo metadata
+   (stars, language, license, topics) + the README — use that as the product
+   picture, and if the repo has a `homepage`, treat THAT as the site for the
+   SEO/GEO/links audits in step 5.
 
 2. CALL `update_project_info` with name, description, and competitors spotted
    on the site. Do this even if competitor info is sparse — you can always
@@ -53,10 +56,12 @@ core value.
 
 4. CALL `generate_product_information` to save the Product Information document.
 
-5. AUDIT SEO with `audit_seo` on the homepage. For high + medium findings, call
-   `log_seo_fix`. Skip low unless fewer than 3 total. Then call `audit_geo`
-   (AI answer-engine readiness) and `audit_links` (link health) on the
-   homepage — one call each. Log any HIGH GEO finding with `log_seo_fix`.
+5. AUDIT SEO with `audit_seo` on the homepage (for a GitHub project, use the
+   repo's `homepage` URL if it has one; skip these audits if it's a repo with
+   no homepage). For high + medium findings, call `log_seo_fix`. Skip low
+   unless fewer than 3 total. Then call `audit_geo` (AI answer-engine
+   readiness) and `audit_links` (link health) on the same URL — one call each.
+   Log any HIGH GEO finding with `log_seo_fix`.
 
 6. DRAFT STARTER CONTENT (do not skip):
    - `draft_tweet`: introduce the product. one tweet. specific.

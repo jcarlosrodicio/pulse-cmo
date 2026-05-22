@@ -20,7 +20,7 @@ Runs on OpenAI-compatible models, so a daily pass costs cents.
 
 Pulse is a self-hosted "AI CMO" for a single product (or several). Point it at a URL and it builds a working picture of the product, then keeps producing ready-to-ship marketing actions on a schedule.
 
-- **First dive** — crawls the site, audits SEO + PageSpeed, extracts brand voice, drafts starter content across channels, writes a Product Information doc, and scans Reddit/HN for openings.
+- **First dive** — point it at a website **or a GitHub repo**; it crawls (repo → clean metadata + README via the GitHub API), audits SEO + PageSpeed, extracts brand voice, drafts starter content across channels, writes a Product Information doc, and scans Reddit/HN for openings.
 - **Daily runs** — a scheduled pass that surfaces 3-5 fresh, shippable actions.
 - **Founder-voice drafting** — tweets, LinkedIn posts, Hacker News posts, blog articles, and Reddit replies written to sound like a real founder: no em-dashes, no emojis, no marketing fluff. Each draft comes as 3 A/B/C variants.
 - **Smart Reddit discovery** — a 6-stage pipeline (profile → pain-point query plan → search → regex filter → LLM relevance verification → rank) that finds threads where your product genuinely fits, not just keyword matches.

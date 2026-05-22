@@ -9,7 +9,10 @@ A detailed tour of everything Pulse does. For a hands-on walkthrough see the
 
 A **project** is one product Pulse manages. You add it with a single input —
 the URL. From that, the first dive infers the name, description, competitors,
-and brand voice. You can run several projects; each has its own actions,
+and brand voice. The URL can be a **website** or a **GitHub repo**
+(`github.com/owner/repo`) — for a repo, Pulse pulls clean metadata (stars,
+language, license, topics) + the README via the GitHub API, and audits the
+repo's linked homepage if it has one. You can run several projects; each has its own actions,
 analytics, schedule, brand voice, writing instructions, launch campaign, and
 version history. Switch with the project pill in the header (`⌘N` to add one).
 
