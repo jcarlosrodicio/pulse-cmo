@@ -435,6 +435,7 @@ function Dashboard({
               logConsole("meta", `opening document: ${kind.replace(/_/g, " ")}`);
             }}
             onSaveProject={saveProjectFromSidebar}
+            onEditSchedule={() => setShowWritingModal(true)}
             isInitialDive={isInitialDive}
           />
         }

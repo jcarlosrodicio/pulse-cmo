@@ -19,6 +19,7 @@ import {
   Link2,
   Tag,
   Info,
+  Clock,
 } from "lucide-react";
 import type { Action, DocumentKind, Project } from "@/lib/api";
 import { Badge } from "../ui/Badge";
@@ -46,6 +47,7 @@ export function CompanySidebar({
   onOpenAction,
   onOpenDocument,
   onSaveProject,
+  onEditSchedule,
   isInitialDive = false,
 }: {
   project: Project;
@@ -53,6 +55,7 @@ export function CompanySidebar({
   onOpenAction: (a: Action) => void;
   onOpenDocument: (kind: DocumentKind) => void;
   onSaveProject: (patch: Partial<Project>) => Promise<void>;
+  onEditSchedule?: () => void;
   isInitialDive?: boolean;
 }) {
   const [editing, setEditing] = useState(false);
@@ -234,18 +237,36 @@ export function CompanySidebar({
         </div>
       ) : null}
 
-      {/* schedule */}
+      {/* schedule — reflects schedule_times; click to edit */}
       <div className="px-4 mt-auto">
         <SectionHeader>Schedule</SectionHeader>
-        <div className="text-[12px] text-fg-dim flex items-center gap-2">
-          <span className="font-mono tabular">
-            {String(project.schedule_hour).padStart(2, "0")}:
-            {String(project.schedule_minute).padStart(2, "0")}
-          </span>
-          <span className="text-muted">{project.timezone}</span>
-          <span className="text-muted">·</span>
-          <span className="text-muted">daily</span>
-        </div>
+        {(() => {
+          const times =
+            project.schedule_times && project.schedule_times.length
+              ? project.schedule_times
+              : [`${String(project.schedule_hour).padStart(2, "0")}:${String(project.schedule_minute).padStart(2, "0")}`];
+          const freq = times.length === 1 ? "daily" : `${times.length}×/day`;
+          const body = (
+            <>
+              <span className="font-mono tabular">{times.join(", ")}</span>
+              <span className="text-muted">{project.timezone}</span>
+              <span className="text-muted">·</span>
+              <span className="text-muted">{freq}</span>
+            </>
+          );
+          return onEditSchedule ? (
+            <button
+              onClick={onEditSchedule}
+              className="w-full text-left text-[12px] text-fg-dim flex items-center gap-2 hover:text-fg btn-press"
+              title="edit run schedule"
+            >
+              {body}
+              <Clock size={11} className="text-muted ml-auto" />
+            </button>
+          ) : (
+            <div className="text-[12px] text-fg-dim flex items-center gap-2">{body}</div>
+          );
+        })()}
       </div>
     </div>
   );
