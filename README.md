@@ -185,6 +185,13 @@ Register it in `orchestrator.build_registry_for_run` and reference it from the r
 - **Frontend:** Next.js 16, React 19, Tailwind 4, TypeScript
 - **Models:** any OpenAI-compatible chat-completions endpoint
 
+## Documentation
+
+- [**Features**](docs/features.md) — a detailed tour of everything Pulse does
+- [**Architecture**](docs/architecture.md) — how it's built (agent loop, data model, subsystems, deployment)
+- [**User Guide**](docs/USER_GUIDE.md) — hands-on walkthrough of the dashboard
+- [**Contributing**](CONTRIBUTING.md) — dev setup + how to add a tool or archetype
+
 ## Contributing
 
 Issues and PRs welcome — see [CONTRIBUTING.md](CONTRIBUTING.md). The codebase is intentionally small and readable; a good first contribution is a new tool or a new launch archetype.

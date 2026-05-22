@@ -430,13 +430,13 @@ What's available to the agent today:
 
 ## 18. Where to look in the code
 
-- Backend agent loop → [src/pulse/agent.py](src/pulse/agent.py)
-- Tool registry + each tool → [src/pulse/tools/](src/pulse/tools/)
-- First-dive + daily + targeted prompts → [src/pulse/orchestrator.py](src/pulse/orchestrator.py)
-- Launch mode (archetypes, plan, content) → [src/pulse/launch.py](src/pulse/launch.py)
-- Traction scan → [src/pulse/traction.py](src/pulse/traction.py)
-- HTTP API → [src/pulse/server.py](src/pulse/server.py)
-- Frontend dashboard glue → [web/src/app/page.tsx](web/src/app/page.tsx)
-- Per-panel components → [web/src/components/](web/src/components/)
+- Backend agent loop → [src/pulse/agent.py](../src/pulse/agent.py)
+- Tool registry + each tool → [src/pulse/tools/](../src/pulse/tools/)
+- First-dive + daily + targeted prompts → [src/pulse/orchestrator.py](../src/pulse/orchestrator.py)
+- Launch mode (archetypes, plan, content) → [src/pulse/launch.py](../src/pulse/launch.py)
+- Traction scan → [src/pulse/traction.py](../src/pulse/traction.py)
+- HTTP API → [src/pulse/server.py](../src/pulse/server.py)
+- Frontend dashboard glue → [web/src/app/page.tsx](../web/src/app/page.tsx)
+- Per-panel components → [web/src/components/](../web/src/components/)
 
 Happy shipping.
