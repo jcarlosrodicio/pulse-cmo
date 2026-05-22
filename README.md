@@ -25,10 +25,12 @@ Pulse is a self-hosted "AI CMO" for a single product (or several). Point it at a
 - **Founder-voice drafting** — tweets, LinkedIn posts, Hacker News posts, blog articles, and Reddit replies written to sound like a real founder: no em-dashes, no emojis, no marketing fluff. Each draft comes as 3 A/B/C variants.
 - **Smart Reddit discovery** — a 6-stage pipeline (profile → pain-point query plan → search → regex filter → LLM relevance verification → rank) that finds threads where your product genuinely fits, not just keyword matches.
 - **Traction** — maps your digital footprint: searches the web, Reddit, and HN for your name/URL, classifies every mention by platform, and tells you where you're strong and where to focus.
+- **Site audits** — Health (SEO + PageSpeed), **AI/GEO** (can ChatGPT/Claude/Perplexity/Gemini crawl + cite you? llms.txt, schema, answerable content), and **Links** (internal/external + broken links).
 - **Launch mode** — classifies your product into a growth archetype and generates an archetype-driven Week-1 launch plan, with a live tracker (K-factor, funnel %, daily "today's move") and the actual posts to write each day, generated inline.
 - **Per-channel generation** — a "+" on any action group to generate one tweet / Reddit reply / article / SEO audit on demand.
 - **Scheduling + versioning** — set when and how often the daily pass runs (once/twice/custom). Each run snapshots a **version** with a day-over-day summary of what changed (new actions, SEO delta, traction delta), viewable as a timeline.
 - **Multi-provider LLM** — configure any OpenAI-compatible providers with automatic failover, primary/secondary/vision roles, and per-token cost tracking, all from a settings panel.
+- **Usage ledger** — every LLM operation (runs, per-channel gen, traction, launch, chat) is metered; the profile menu shows last-run and all-time token + cost totals.
 
 ## Screenshots
 
@@ -144,6 +146,8 @@ pulse.cc/
 │   ├── orchestrator.py         # run prompts + targeted-run playbook
 │   ├── launch.py               # archetype table, plan + content generation
 │   ├── traction.py             # digital-footprint scan
+│   ├── versioning.py           # per-run snapshots + day-over-day summary
+│   ├── tools/geo.py            # AI/GEO + link audits
 │   ├── chat.py                 # chat agent + doc regeneration
 │   ├── settings_store.py       # runtime provider config
 │   ├── tools/                  # crawl, seo, web, discovery, drafting, reddit, …

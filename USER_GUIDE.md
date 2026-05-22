@@ -102,8 +102,9 @@ Five tabs:
 
 - **Health** *(default)* — on-page SEO score (0-100), severity breakdown (high/medium/low), and **PageSpeed gauges** (Performance / Accessibility / Best-practices / SEO, both mobile and desktop) once `check_pagespeed` has run. Also shows Core Web Vitals (LCP, FCP, CLS, TBT) and top opportunities from Lighthouse.
 - **Traction** — your **digital footprint**. Hit *Scan footprint* and Pulse searches the web, Reddit, and Hacker News for your product name + URL, classifies every mention by platform, and shows where you're strong, the sentiment, and a "where to focus" list. See §11.
+- **Links** — internal vs external link counts on your homepage, plus a HEAD-check that flags broken links. *Scan links* to run it.
+- **AI / GEO** — generative-engine optimization. *Run GEO audit* checks whether AI answer engines (ChatGPT/GPTBot, Claude/ClaudeBot, Perplexity, Gemini/Google-Extended) are allowed to crawl you in robots.txt, plus llms.txt, JSON-LD + FAQ schema, question-style headings, and meta description — scored, with per-engine readiness and fixes.
 - **Technical** — signal list (sitemap, JSON-LD, HSTS, etc.) and findings with severity.
-- **AI / GEO** — coming soon (how ChatGPT / Claude / Perplexity cite your site).
 - **Checks** — every check that passes, grouped by category.
 
 When data hasn't loaded yet, panels show shimmer skeletons. When the first dive completes, real data swaps in.
@@ -370,6 +371,11 @@ A full first dive costs roughly **$0.05–0.20** in tokens at OpenAdapter pricin
 
 You can swap providers in `config.yaml` under `llm.providers` — any OpenAI-compatible endpoint works.
 
+**Usage ledger.** Every LLM operation is metered — main runs, per-channel
+content generation, competitor analysis, traction scans, launch
+infer/classify/plan/draft, and chat. Open the profile menu (top-right) to see
+**Last run** and **Overall** (all-time) token + cost totals.
+
 ---
 
 ## 15. Troubleshooting
@@ -396,10 +402,10 @@ Check the scheduler. By default it's enabled in `config.yaml` (`scheduler.enable
 
 ## 16. Tool inventory
 
-What's available to the agent today (21 tools):
+What's available to the agent today:
 
 **Discovery & analysis**
-`crawl_website`, `analyze_competitor`, `audit_seo`, `check_pagespeed`, `web_search`, `news_search`, `read_url`, `find_hn_opportunities`, `find_reddit_opportunities`
+`crawl_website`, `analyze_competitor`, `audit_seo`, `check_pagespeed`, `audit_geo`, `audit_links`, `web_search`, `news_search`, `read_url`, `find_hn_opportunities`, `find_reddit_opportunities`
 
 **Content drafting**
 `draft_tweet`, `draft_hn_post`, `draft_linkedin_post`, `draft_article`, `draft_reddit_reply`
