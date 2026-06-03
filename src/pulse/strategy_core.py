@@ -22,7 +22,7 @@ import structlog
 from .brief import brief_context_block
 from .llm import LLM, Message
 from .store import ActionStore
-from .text import parse_json_lenient, strip_stray_cjk
+from .text import parse_json_lenient, strip_draft_preamble, strip_stray_cjk
 
 log = structlog.get_logger()
 
@@ -71,6 +71,7 @@ def gather_evidence(store: ActionStore, project_id: int) -> dict[str, Any]:
     pos = store.get_document_by_kind(project_id, "positioning")
     return {
         "project": project,
+        "brain": project.get("product_brain") or store.get_product_brain(project_id),
         "brief": project.get("brief") or store.get_brief(project_id),
         "crawl": project.get("crawl_summary"),
         "seo": project.get("seo_summary"),
@@ -141,6 +142,12 @@ def render_evidence(ev: dict[str, Any], *, include: tuple[str, ...]) -> str:
             f"DESCRIPTION: {p.get('description') or '(none)'}\n"
             f"KNOWN COMPETITORS: {comps}"
         )
+    if "brain" in include and ev.get("brain"):
+        from .product_brain import brain_context_block  # lazy: avoids import cycle
+
+        b = brain_context_block(ev["brain"])
+        if b:
+            blocks.append(b)
     if "brief" in include:
         b = brief_context_block(ev.get("brief"))
         if b:
@@ -268,8 +275,15 @@ async def generate_positioning(
     """Run the diagnosis. Saves a 'positioning' document and returns the JSON.
     Downstream generators (strategy, gaps) consume it."""
     ev = gather_evidence(store, project_id)
+    # Positioning is only as sharp as the product understanding it stands on —
+    # ensure the Product Brain exists first (build it if this is a standalone call).
+    if not ev.get("brain"):
+        from .product_brain import generate_product_brain
+
+        await generate_product_brain(llm, store, project_id)
+        ev = gather_evidence(store, project_id)
     evidence_block = render_evidence(
-        ev, include=("product", "brief", "crawl", "seo", "traction", "competitors")
+        ev, include=("brain", "product", "brief", "crawl", "seo", "traction", "competitors")
     )
     user = evidence_block + "\n\nProduce the positioning diagnosis. Output only the JSON object."
     raw = await llm.complete(
@@ -290,3 +304,58 @@ async def generate_positioning(
         metadata={"positioning": pos},
     )
     return pos
+
+
+# ---------------------------------------------------------------------------
+# CRITIC — generate → verify → revise. A SEPARATE grounded pass (intrinsic
+# self-critique is fragile) that rewrites generic/off-wedge output and strips
+# meta-narration. Bounded to one revision.
+# ---------------------------------------------------------------------------
+
+_CRITIC_SYSTEM = (
+    "You are a ruthless editor for an indie founder's marketing. You get a DRAFT "
+    "and the product's brain. Make the draft specific to THIS product, or cut the "
+    "generic parts. Keep its markdown format and voice.\n\n"
+    "Apply these tests and REWRITE to fix every failure:\n"
+    "- GENERIC TEST: would this line appear unchanged in a different product's "
+    "plan? If yes, rewrite it to name the product's specific WEDGE, a real "
+    "feature, the ICP, or a named competitor — or delete it.\n"
+    "- WEDGE TEST: does it reflect the actual WEDGE (below), not the generic "
+    "category? If not, refocus it.\n"
+    "- VOCABULARY: prefer the ICP's own words (below) over marketing speak.\n"
+    "- NO META: delete any narration ('Let me analyze', 'Here's the plan', "
+    "'Sure,', 'I'll write', 'Okay,') — output the artifact only.\n"
+    "- Keep what's already specific and good. Don't pad, don't add preamble.\n\n"
+    "Output ONLY the revised artifact in the same markdown format. No commentary, "
+    "no preface. English only."
+)
+
+
+async def critique_revise(
+    llm: LLM, *, kind: str, draft: str, brain: dict[str, Any] | None
+) -> str:
+    """One grounded critic pass: rewrite generic/off-wedge content + strip
+    meta-narration. Returns the revised draft (falls back to the cleaned
+    original on any failure)."""
+    cleaned = strip_stray_cjk(strip_draft_preamble(draft or "")).strip()
+    if not cleaned or not brain:
+        return cleaned
+    from .product_brain import brain_context_block
+
+    user = (
+        brain_context_block(brain)
+        + f"\n\nDRAFT (a {kind}):\n{cleaned}\n\n"
+        f"Rewrite per the rules. Output only the revised {kind}."
+    )
+    try:
+        revised = await llm.complete(
+            [Message(role="system", content=_CRITIC_SYSTEM), Message(role="user", content=user)],
+            temperature=0.4,
+            max_tokens=2600,
+        )
+    except Exception as e:
+        log.warning("critique_revise_failed", kind=kind, error=repr(e))
+        return cleaned
+    revised = strip_stray_cjk(strip_draft_preamble(revised or "")).strip()
+    # guard against a critic that returns something degenerate/empty
+    return revised if len(revised) >= max(40, len(cleaned) // 3) else cleaned

@@ -63,29 +63,36 @@ everything else specific instead of generic.
    total. Then call `audit_geo` and `audit_links` on the same URL — one call
    each. Log any HIGH GEO finding with `log_seo_fix`.
 
-6. RESEARCH COMPETITORS (do this BEFORE positioning so the diagnosis is real):
-   for the top 1-2 competitors, `analyze_competitor` on each competitor URL
-   (use `web_search` if you don't know the URL). Their reads are saved
-   automatically for the next steps. Cap at 2.
+6. RESEARCH COMPETITORS (do this BEFORE the brain so it's grounded): for the top
+   1-2 competitors, `analyze_competitor` on each competitor URL (use
+   `web_search` if you don't know the URL). Their reads are saved automatically.
+   Cap at 2.
 
-7. DIAGNOSE: call `generate_positioning_doc` (no arguments). This produces the
-   situation read, ICP, value prop, the WEDGE, ranked channels, and the
-   north-star metric from everything gathered so far. This is the spine.
+7. BUILD THE PRODUCT BRAIN: call `build_product_brain` (no arguments). It
+   distills everything so far — crawl, brief, competitor reads — into the SHARED
+   intelligence: the WEDGE, the ICP and their exact vocabulary, the communities
+   they live in, and intent-grouped search queries. Every step below conditions
+   on it, so output is specific to THIS product, not generic. Do this before
+   positioning.
 
-8. GENERATE the plan: `generate_marketing_strategy(timeframe_days=30)`. It
-   builds on the positioning and the brief — a sequenced plan with a leading
-   indicator on every item, not a generic checklist.
+8. DIAGNOSE: call `generate_positioning_doc` (no arguments) — situation read,
+   ICP, value prop, the WEDGE, ranked channels, north-star metric. The spine.
 
-9. DRAFT STARTER CONTENT, on-strategy (do not skip):
-   - `draft_tweet`: introduce the product, aligned to the wedge. one tweet.
-   - BEFORE the article: call `news_search`/`web_search` for the category to
-     find 3-5 recent items (dates + sources), then `draft_article` (length=800)
-     passing them as `current_context`.
+9. GENERATE the plan: `generate_marketing_strategy(timeframe_days=30)`. Builds
+   on the positioning + brain — a sequenced plan with a leading indicator on
+   every item, not a generic checklist.
 
-10. FIND HN opportunities — ONE call to `find_hn_opportunities` with 3-5
-    keywords. `log_hn_opportunity` on the 1-2 most relevant threads.
+10. DRAFT STARTER CONTENT, on-wedge (do not skip):
+    - `draft_tweet`: introduce the product, aligned to the wedge. one tweet.
+    - BEFORE the article: call `news_search`/`web_search` for the category to
+      find 3-5 recent items (dates + sources), then `draft_article` (length=800)
+      passing them as `current_context`.
 
-11. FIND REDDIT opportunities — ONE call to `find_reddit_opportunities` with NO
+11. FIND HN opportunities — ONE call to `find_hn_opportunities` with 3-5
+    keywords drawn from the brain (use its category terms + competitor names,
+    not just the product name). `log_hn_opportunity` on the 1-2 most relevant.
+
+12. FIND REDDIT opportunities — ONE call to `find_reddit_opportunities` with NO
     arguments. Items include `suggested_angle`, `mention_product`, `llm_reason`,
     `final_score`. Pick the TOP 1-2. For each, `draft_reddit_reply` with:
       - post_url, post_title, post_body (paste in full), subreddit
@@ -94,7 +101,7 @@ everything else specific instead of generic.
       - mention_product = item's `mention_product`
     Do NOT call `log_reddit_opportunity`. Never search Reddit twice.
 
-12. SAVE the Competitor Analysis document with `generate_competitor_analysis`,
+13. SAVE the Competitor Analysis document with `generate_competitor_analysis`,
     then `identify_market_gaps` (both read the competitor reads from step 6).
 
 STOP when done. Output a 3-5 line summary of what you generated.
@@ -102,11 +109,12 @@ STOP when done. Output a 3-5 line summary of what you generated.
 RULES:
   * Use tools — don't speculate. Each call should be motivated by a result.
   * NEVER call the same tool more than once unless explicitly told to.
+  * Anchor EVERY output on the product brain's wedge + ICP vocabulary. If a
+    suggestion would apply to any product, it's wrong — make it specific.
   * Reddit replies need 5+ sentences of real value before any product mention.
-  * Steps 7-11 (positioning, strategy, a content draft, HN, AND Reddit) are the
-    core deliverables — make sure they ALL complete. Step 12 (competitor doc +
-    gaps) is the only one to drop if you run low on iterations. Don't skip
-    Reddit — it's one of the most valuable outputs.
+  * Steps 7-12 (brain, positioning, strategy, a content draft, HN, AND Reddit)
+    are the core deliverables — make sure they ALL complete. Step 13 (competitor
+    doc + gaps) is the only one to drop if you run low on iterations.
 """
 
 
@@ -183,7 +191,7 @@ def build_registry_for_run(
         registry.add(t)
     for t in make_geo_tools(store=store, project_id=project_id):
         registry.add(t)
-    for t in make_discovery_tools():
+    for t in make_discovery_tools(store, project_id, llm):
         registry.add(t)
     for t in make_drafting_tools(llm=llm, store=store, project_id=project_id, run_id=run_id):
         registry.add(t)

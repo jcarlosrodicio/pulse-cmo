@@ -11,6 +11,7 @@ from ..store import ActionStore
 from ..strategy_core import (
     ANALYST_STYLE,
     GUARDRAIL_BLOCK,
+    critique_revise,
     gather_evidence,
     generate_positioning,
     render_evidence,
@@ -67,6 +68,28 @@ def make_strategy_tools(llm: LLM, store: ActionStore, project_id: int) -> list[T
         return json.dumps({"ok": True, "profile": profile})
 
     @tool
+    async def build_product_brain() -> str:
+        """Build the Product Brain — the shared intelligence (the WEDGE, ICP,
+        JTBD, the ICP's exact vocabulary, target communities, and intent-grouped
+        search queries) that EVERY later step conditions on for relevance.
+
+        Call this on the first dive AFTER the crawl + 1-2 `analyze_competitor`
+        calls and BEFORE positioning / strategy / content / discovery. Reads the
+        persisted evidence itself; no arguments.
+        """
+        from ..product_brain import generate_product_brain
+
+        brain = await generate_product_brain(llm, store, project_id)
+        if not brain:
+            return json.dumps({"ok": False, "error": "could not build product brain"})
+        return json.dumps({
+            "ok": True,
+            "wedge": (brain.get("wedge") or {}).get("capability", ""),
+            "icp_vocabulary": (brain.get("icp_vocabulary") or [])[:6],
+            "target_subreddits": (brain.get("communities") or {}).get("subreddits", [])[:6],
+        })
+
+    @tool
     async def generate_positioning_doc() -> str:
         """Run the strategic diagnosis (situation, ICP, value prop, the wedge,
         ranked channels with leading indicators, measurement, open questions).
@@ -110,7 +133,7 @@ def make_strategy_tools(llm: LLM, store: ActionStore, project_id: int) -> list[T
             ev = gather_evidence(store, project_id)
 
         evidence_block = render_evidence(
-            ev, include=("product", "brief", "positioning", "seo", "traction", "competitors")
+            ev, include=("brain", "product", "brief", "positioning", "seo", "traction", "competitors")
         )
         system = (
             "You are a head of growth writing the next-"
@@ -138,7 +161,11 @@ def make_strategy_tools(llm: LLM, store: ActionStore, project_id: int) -> list[T
             temperature=0.5,
             max_tokens=2400,
         )
-        plan = strip_stray_cjk(plan)
+        # generate -> verify -> revise: a separate critic rewrites generic/off-wedge
+        # lines and strips any meta-narration ("Let me analyze…") before saving.
+        plan = await critique_revise(
+            llm, kind="30-day marketing plan", draft=plan, brain=ev.get("brain")
+        )
         run_id = store.latest_run_id(project_id)
         action_id = store.create_action(
             project_id=project_id,
@@ -192,7 +219,7 @@ def make_strategy_tools(llm: LLM, store: ActionStore, project_id: int) -> list[T
 
         ev = gather_evidence(store, project_id)
         evidence_block = render_evidence(
-            ev, include=("product", "brief", "positioning", "competitors")
+            ev, include=("brain", "product", "brief", "positioning", "competitors")
         )
         extra = "\n".join(f"- {s.strip()}" for s in (competitor_summaries or [])[:6] if s.strip())
         if not ev.get("competitor_reads") and not extra:
@@ -247,6 +274,7 @@ def make_strategy_tools(llm: LLM, store: ActionStore, project_id: int) -> list[T
 
     return [
         extract_brand_voice,
+        build_product_brain,
         generate_positioning_doc,
         generate_marketing_strategy,
         update_project_info,

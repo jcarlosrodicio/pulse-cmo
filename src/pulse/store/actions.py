@@ -161,6 +161,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
         ("projects", "brief", "TEXT"),            # json: the marketing brief (goal/icp/baseline/…)
         ("projects", "crawl_summary", "TEXT"),    # json: distilled crawl evidence (own site)
         ("projects", "competitor_reads", "TEXT"), # json: per-competitor crawl reads
+        ("projects", "product_brain", "TEXT"),    # json: the shared product intelligence (wedge/ICP/JTBD/queries)
         ("actions", "detail_md", "TEXT"),
         ("agent_runs", "prompt_tokens", "INTEGER DEFAULT 0"),
         ("agent_runs", "completion_tokens", "INTEGER DEFAULT 0"),
@@ -221,7 +222,7 @@ class ActionStore:
             "schedule_minute",
             "timezone",
         }
-        json_fields = {"competitors", "writing_instructions", "pagespeed_summary", "seo_summary", "brand_voice", "schedule_times", "brief", "crawl_summary", "competitor_reads"}
+        json_fields = {"competitors", "writing_instructions", "pagespeed_summary", "seo_summary", "brand_voice", "schedule_times", "brief", "crawl_summary", "competitor_reads", "product_brain"}
         sets, vals = [], []
         for k, v in fields.items():
             if k in scalar:
@@ -336,6 +337,23 @@ class ActionStore:
         if not row or not row["competitor_reads"]:
             return []
         return json.loads(row["competitor_reads"])
+
+    def set_product_brain(self, project_id: int, brain: dict[str, Any]) -> None:
+        """The shared product intelligence (wedge / ICP / JTBD / entities /
+        vocabulary / target communities / intent search seeds). Built once at
+        dive time; every downstream tool conditions on it for relevance."""
+        with self._lock, self._conn() as conn:
+            conn.execute(
+                "UPDATE projects SET product_brain=? WHERE id=?",
+                (json.dumps(brain), project_id),
+            )
+
+    def get_product_brain(self, project_id: int) -> dict[str, Any] | None:
+        with self._conn() as conn:
+            row = conn.execute("SELECT product_brain FROM projects WHERE id=?", (project_id,)).fetchone()
+        if not row or not row["product_brain"]:
+            return None
+        return json.loads(row["product_brain"])
 
     # --- usage ledger -------------------------------------------------------
 
@@ -834,6 +852,7 @@ def _hydrate_project(row: sqlite3.Row | None) -> dict[str, Any] | None:
     d["brief"] = json.loads(d["brief"]) if d.get("brief") else None
     d["crawl_summary"] = json.loads(d["crawl_summary"]) if d.get("crawl_summary") else None
     d["competitor_reads"] = json.loads(d["competitor_reads"]) if d.get("competitor_reads") else []
+    d["product_brain"] = json.loads(d["product_brain"]) if d.get("product_brain") else None
     d["schedule_times"] = json.loads(d["schedule_times"]) if d.get("schedule_times") else None
     # back-compat: derive schedule_times from hour/minute if not set
     if not d["schedule_times"]:
