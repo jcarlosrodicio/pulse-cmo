@@ -158,6 +158,9 @@ def _migrate(conn: sqlite3.Connection) -> None:
         ("projects", "schedule_times", "TEXT"),
         ("projects", "geo_summary", "TEXT"),
         ("projects", "links_summary", "TEXT"),
+        ("projects", "brief", "TEXT"),            # json: the marketing brief (goal/icp/baseline/…)
+        ("projects", "crawl_summary", "TEXT"),    # json: distilled crawl evidence (own site)
+        ("projects", "competitor_reads", "TEXT"), # json: per-competitor crawl reads
         ("actions", "detail_md", "TEXT"),
         ("agent_runs", "prompt_tokens", "INTEGER DEFAULT 0"),
         ("agent_runs", "completion_tokens", "INTEGER DEFAULT 0"),
@@ -218,7 +221,7 @@ class ActionStore:
             "schedule_minute",
             "timezone",
         }
-        json_fields = {"competitors", "writing_instructions", "pagespeed_summary", "seo_summary", "brand_voice", "schedule_times"}
+        json_fields = {"competitors", "writing_instructions", "pagespeed_summary", "seo_summary", "brand_voice", "schedule_times", "brief", "crawl_summary", "competitor_reads"}
         sets, vals = [], []
         for k, v in fields.items():
             if k in scalar:
@@ -283,6 +286,56 @@ class ActionStore:
                 "UPDATE projects SET links_summary=? WHERE id=?",
                 (json.dumps(summary), project_id),
             )
+
+    def set_crawl_summary(self, project_id: int, summary: dict[str, Any]) -> None:
+        """Persist the distilled crawl of the project's OWN site so downstream
+        generators (product info, positioning, strategy) work from real page
+        text instead of the one-line description."""
+        with self._lock, self._conn() as conn:
+            conn.execute(
+                "UPDATE projects SET crawl_summary=? WHERE id=?",
+                (json.dumps(summary), project_id),
+            )
+
+    def set_brief(self, project_id: int, brief: dict[str, Any]) -> None:
+        with self._lock, self._conn() as conn:
+            conn.execute(
+                "UPDATE projects SET brief=? WHERE id=?",
+                (json.dumps(brief), project_id),
+            )
+
+    def get_brief(self, project_id: int) -> dict[str, Any] | None:
+        with self._conn() as conn:
+            row = conn.execute("SELECT brief FROM projects WHERE id=?", (project_id,)).fetchone()
+        if not row or not row["brief"]:
+            return None
+        return json.loads(row["brief"])
+
+    def add_competitor_read(self, project_id: int, read: dict[str, Any]) -> None:
+        """Append (or replace by url) one competitor crawl read. This is the
+        evidence generate_competitor_analysis / identify_market_gaps consume —
+        the actual crawl, not just the competitor's name."""
+        with self._lock, self._conn() as conn:
+            row = conn.execute(
+                "SELECT competitor_reads FROM projects WHERE id=?", (project_id,)
+            ).fetchone()
+            reads = json.loads(row["competitor_reads"]) if row and row["competitor_reads"] else []
+            url = (read.get("url") or "").strip().lower()
+            reads = [r for r in reads if (r.get("url") or "").strip().lower() != url]
+            reads.append(read)
+            conn.execute(
+                "UPDATE projects SET competitor_reads=? WHERE id=?",
+                (json.dumps(reads[-8:]), project_id),  # keep the last 8
+            )
+
+    def get_competitor_reads(self, project_id: int) -> list[dict[str, Any]]:
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT competitor_reads FROM projects WHERE id=?", (project_id,)
+            ).fetchone()
+        if not row or not row["competitor_reads"]:
+            return []
+        return json.loads(row["competitor_reads"])
 
     # --- usage ledger -------------------------------------------------------
 
@@ -736,6 +789,31 @@ class ActionStore:
         with self._lock, self._conn() as conn:
             conn.execute("DELETE FROM launch_campaigns WHERE project_id=?", (project_id,))
 
+    # --- project deletion ---------------------------------------------------
+
+    def delete_project(self, project_id: int) -> None:
+        """Complete wipe: the project and every row that references it
+        (actions, runs, documents, versions, chat, launch, usage). Children are
+        deleted before parents so the foreign keys stay satisfied."""
+        with self._lock, self._conn() as conn:
+            conn.execute(
+                "DELETE FROM chat_messages WHERE session_id IN "
+                "(SELECT id FROM chat_sessions WHERE project_id=?)",
+                (project_id,),
+            )
+            # actions reference agent_runs(run_id), so delete actions first
+            for table in (
+                "chat_sessions",
+                "actions",
+                "documents",
+                "project_versions",
+                "usage_events",
+                "launch_campaigns",
+                "agent_runs",
+            ):
+                conn.execute(f"DELETE FROM {table} WHERE project_id=?", (project_id,))
+            conn.execute("DELETE FROM projects WHERE id=?", (project_id,))
+
 
 def _hydrate_project(row: sqlite3.Row | None) -> dict[str, Any] | None:
     if not row:
@@ -753,6 +831,9 @@ def _hydrate_project(row: sqlite3.Row | None) -> dict[str, Any] | None:
     d["traction_summary"] = json.loads(d["traction_summary"]) if d.get("traction_summary") else None
     d["geo_summary"] = json.loads(d["geo_summary"]) if d.get("geo_summary") else None
     d["links_summary"] = json.loads(d["links_summary"]) if d.get("links_summary") else None
+    d["brief"] = json.loads(d["brief"]) if d.get("brief") else None
+    d["crawl_summary"] = json.loads(d["crawl_summary"]) if d.get("crawl_summary") else None
+    d["competitor_reads"] = json.loads(d["competitor_reads"]) if d.get("competitor_reads") else []
     d["schedule_times"] = json.loads(d["schedule_times"]) if d.get("schedule_times") else None
     # back-compat: derive schedule_times from hour/minute if not set
     if not d["schedule_times"]:

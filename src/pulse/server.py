@@ -75,6 +75,7 @@ class UpdateProject(BaseModel):
     schedule_times: list[str] | None = None   # ["06:00"] or ["06:00","18:00"]
     timezone: str | None = None
     writing_instructions: dict[str, Any] | None = None
+    brief: dict[str, Any] | None = None        # the marketing brief (goal/icp/…)
 
 
 class StartRun(BaseModel):
@@ -101,7 +102,7 @@ class UpdateDocument(BaseModel):
 
 
 class RegenerateDocument(BaseModel):
-    kind: str = Field(pattern="^(product_information|competitor_analysis|brand_voice|marketing_strategy)$")
+    kind: str = Field(pattern="^(product_information|competitor_analysis|brand_voice|marketing_strategy|positioning)$")
 
 
 class CreateChatSession(BaseModel):
@@ -358,11 +359,34 @@ def create_app(config: Config) -> FastAPI:
             kind="daily",
         )
 
+    def _spawn_traction_scan(project_id: int) -> None:
+        """Kick off a digital-footprint scan in the background (its own task, so
+        it runs alongside a dive). Marks 'scanning' immediately so the Traction
+        tab shows progress; failures are caught and surfaced as 'failed'."""
+        store.set_traction_summary(
+            project_id,
+            {"status": "scanning", "started_at": datetime.now(timezone.utc).isoformat()},
+        )
+
+        async def _run() -> None:
+            try:
+                async with usage_scope() as t:
+                    await scan_traction(config=config, llm=llm, store=store, project_id=project_id)
+                _log_usage("traction", t, project_id)
+            except Exception as e:
+                log.exception("traction_scan_failed", project_id=project_id)
+                store.set_traction_summary(
+                    project_id, {"status": "failed", "error": f"{type(e).__name__}: {e}"}
+                )
+
+        _spawn(_run())
+
     def _schedule_project(project_id: int) -> None:
         """(Re)register one cron job per configured run time for a project."""
-        # clear any existing jobs for this project
+        # clear any existing jobs for this project (trailing '-' so project 1
+        # doesn't match project 12's 'daily-12-0' jobs)
         for job in scheduler.get_jobs():
-            if job.id and job.id.startswith(f"daily-{project_id}"):
+            if job.id and job.id.startswith(f"daily-{project_id}-"):
                 scheduler.remove_job(job.id)
         proj = store.get_project(project_id) or {}
         times = proj.get("schedule_times")
@@ -445,6 +469,7 @@ def create_app(config: Config) -> FastAPI:
                     kind="first_dive",
                 )
             )
+            _spawn_traction_scan(pid)
 
         proj = store.get_project(pid) or {}
         proj["initial_run_id"] = run_id
@@ -492,6 +517,105 @@ def create_app(config: Config) -> FastAPI:
             _schedule_project(project_id)
         return store.get_project(project_id)
 
+    @app.delete("/projects/{project_id}")
+    async def delete_project(project_id: int) -> dict:
+        """Complete wipe of a project and everything it owns. Irreversible."""
+        if not store.get_project(project_id):
+            raise HTTPException(404, "project not found")
+        if config.scheduler.enabled:
+            for job in scheduler.get_jobs():
+                if job.id and job.id.startswith(f"daily-{project_id}-"):
+                    scheduler.remove_job(job.id)
+        store.delete_project(project_id)
+        log.info("project_deleted", project_id=project_id)
+        return {"ok": True, "deleted": project_id}
+
+    @app.post("/projects/{project_id}/recon")
+    async def recon_project(project_id: int) -> dict:
+        """Fast pre-dive pass: crawl the site, persist the evidence, seed the
+        name/description, and return a (blank) brief immediately. The smart
+        pre-fill is a SEPARATE, async call (`/brief/suggest`) so a slow reasoning
+        model never blocks the modal. Crawl-only, so this is quick and never 500s.
+        """
+        from .brief import default_brief
+        from .tools.crawl import crawl_website, distill_crawl
+
+        project = store.get_project(project_id)
+        if not project:
+            raise HTTPException(404, "project not found")
+
+        crawl_summary: dict[str, Any] = {}
+        crawl_ok = False
+        try:
+            raw = await crawl_website.fn(url=project["url"], max_pages=6)
+            try:
+                crawl_obj = json.loads(raw)
+            except json.JSONDecodeError:
+                crawl_obj = {"ok": False}
+            crawl_ok = bool(crawl_obj.get("ok"))
+            if crawl_ok:
+                crawl_summary = distill_crawl(crawl_obj)
+                store.set_crawl_summary(project_id, crawl_summary)
+                # seed name/description from the crawl if they're still placeholder
+                host_slug = (urlparse(project["url"]).hostname or "").split(".")[0].lower()
+                updates: dict[str, Any] = {}
+                if crawl_summary.get("description") and not project.get("description"):
+                    updates["description"] = crawl_summary["description"][:300]
+                if crawl_summary.get("title") and (project.get("name") or "").lower() in ("", host_slug):
+                    updates["name"] = crawl_summary["title"].split("·")[0].split("|")[0].strip()[:80]
+                if updates:
+                    store.update_project(project_id, **updates)
+                    project = store.get_project(project_id)
+        except Exception as e:
+            log.warning("recon_crawl_failed", project_id=project_id, error=repr(e))
+
+        brief = store.get_brief(project_id) or default_brief()
+        store.set_brief(project_id, brief)
+        return {
+            "brief": brief,
+            "crawl": {
+                "title": crawl_summary.get("title", ""),
+                "description": crawl_summary.get("description", ""),
+                "pages_fetched": crawl_summary.get("pages_fetched", 0),
+                "ok": crawl_ok,
+            },
+            "project": store.get_project(project_id),
+        }
+
+    @app.post("/projects/{project_id}/brief/suggest")
+    async def suggest_brief(project_id: int) -> dict:
+        """The LLM pre-fill, called in the background after recon so the slow
+        reasoning model never blocks the modal. Best-effort: returns only the
+        inferable fields it could fill; on slowness/failure returns {}."""
+        from .brief import infer_brief
+
+        project = store.get_project(project_id)
+        if not project:
+            raise HTTPException(404, "project not found")
+        crawl_text = (project.get("crawl_summary") or {}).get("text", "")
+        suggested: dict[str, Any] = {}
+        try:
+            async with usage_scope() as t:
+                brief = await asyncio.wait_for(
+                    infer_brief(llm, project=project, crawl_text=crawl_text),
+                    timeout=40.0,
+                )
+            _log_usage("brief_suggest", t, project_id)
+            suggested = {
+                k: brief.get(k)
+                for k in ("goal_metric", "icp", "not_for", "wedge_hypothesis", "budget", "can_produce")
+                if brief.get(k)
+            }
+            # merge into the stored brief so it persists even if the user waits
+            stored = store.get_brief(project_id) or {}
+            for k, v in suggested.items():
+                if not stored.get(k):
+                    stored[k] = v
+            store.set_brief(project_id, stored)
+        except Exception as e:
+            log.warning("brief_suggest_failed", project_id=project_id, error=repr(e))
+        return {"suggested": suggested}
+
     # --- runs --------------------------------------------------------------
 
     @app.post("/projects/{project_id}/runs")
@@ -514,6 +638,10 @@ def create_app(config: Config) -> FastAPI:
                 topic=body.topic,
             )
         )
+        # a first dive also kicks off a traction scan in parallel, so the
+        # digital-footprint map fills in alongside the dive
+        if body.kind == "first_dive":
+            _spawn_traction_scan(project_id)
         return {"run_id": run_id, "stream_url": f"/runs/{run_id}/stream"}
 
     @app.get("/runs/{run_id}")
@@ -915,25 +1043,7 @@ def create_app(config: Config) -> FastAPI:
     @app.post("/projects/{project_id}/traction/scan")
     async def traction_scan(project_id: int) -> dict:
         _require_project(project_id)
-        # mark scanning immediately so the UI can show progress; preserve any
-        # prior result fields under the placeholder isn't needed — status drives it
-        store.set_traction_summary(
-            project_id,
-            {"status": "scanning", "started_at": datetime.now(timezone.utc).isoformat()},
-        )
-
-        async def _run() -> None:
-            try:
-                async with usage_scope() as t:
-                    await scan_traction(config=config, llm=llm, store=store, project_id=project_id)
-                _log_usage("traction", t, project_id)
-            except Exception as e:
-                log.exception("traction_scan_failed", project_id=project_id)
-                store.set_traction_summary(
-                    project_id, {"status": "failed", "error": f"{type(e).__name__}: {e}"}
-                )
-
-        _spawn(_run())
+        _spawn_traction_scan(project_id)
         return {"status": "scanning"}
 
     @app.get("/projects/{project_id}/traction")

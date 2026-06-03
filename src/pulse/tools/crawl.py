@@ -10,6 +10,7 @@ import asyncio
 import json
 import os
 import re
+from typing import Any
 from urllib.parse import urljoin, urlparse
 
 import httpx
@@ -167,6 +168,49 @@ def _extract_links(html: str, base_url: str, same_host: bool = True) -> list[str
     return sorted(out)
 
 
+def _dump_capped(obj: dict, limit: int = 12000) -> str:
+    """Serialize to JSON under a char budget WITHOUT cutting mid-string.
+
+    The old code did `json.dumps(...)[:limit]`, which could slice inside a
+    string and hand the model invalid JSON. Instead we drop whole trailing
+    pages (least important) until it fits, so the result always parses.
+    """
+    s = json.dumps(obj, ensure_ascii=False)
+    if len(s) <= limit:
+        return s
+    pages = obj.get("pages")
+    if isinstance(pages, list):
+        while len(pages) > 1 and len(json.dumps(obj, ensure_ascii=False)) > limit:
+            pages.pop()
+        if pages and len(json.dumps(obj, ensure_ascii=False)) > limit:
+            pages[0]["excerpt"] = (pages[0].get("excerpt") or "")[: max(0, limit - 1200)]
+    s = json.dumps(obj, ensure_ascii=False)
+    return s if len(s) <= limit else s[:limit]
+
+
+def distill_crawl(obj: dict) -> dict:
+    """Compact a crawl_website result into the evidence block downstream
+    generators read (persisted as the project's crawl_summary)."""
+    pages = obj.get("pages") or []
+    home = pages[0] if pages else {}
+    meta = home.get("meta") or {}
+    texts = []
+    for p in pages:
+        ex = (p.get("excerpt") or "").strip()
+        if ex:
+            texts.append(f"[{p.get('url')}]\n{ex}")
+    return {
+        "site": obj.get("site"),
+        "source": obj.get("source") or "web",
+        "title": meta.get("title") or "",
+        "description": meta.get("description") or meta.get("og:description") or "",
+        "h1": meta.get("h1") or "",
+        "pages_fetched": obj.get("pages_fetched"),
+        "text": "\n\n".join(texts)[:6000],
+        "repo": obj.get("repo"),  # present only for github projects
+    }
+
+
 async def _try_sitemap(client: httpx.AsyncClient, root: str) -> list[str]:
     parsed = urlparse(root)
     sitemap_url = f"{parsed.scheme}://{parsed.netloc}/sitemap.xml"
@@ -264,29 +308,93 @@ async def crawl_website(url: str, max_pages: int = 10) -> str:
         *[p for p in sub_results if p["meta"] or p["excerpt"]],
     ]
 
-    return json.dumps(
+    return _dump_capped(
         {
             "ok": True,
             "site": url,
             "pages_fetched": len(pages),
             "sitemap_found": bool(sitemap_urls),
             "pages": pages,
-        },
-        ensure_ascii=False,
-    )[:12000]
+        }
+    )
 
 
-@tool
-async def analyze_competitor(competitor_url: str) -> str:
-    """Crawl a competitor site, extract pricing, features, positioning.
+async def _web_search_fallback(base_url: str, api_key: str, query: str, n: int = 5) -> list[dict]:
+    """Snippet-level fallback when a crawl returns almost nothing (JS-rendered
+    sites). Hits the same OpenAdapter search endpoint the web tools use."""
+    if not (base_url and api_key):
+        return []
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as cx:
+            r = await cx.post(
+                f"{base_url.rstrip('/')}/v1/tools/search",
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                json={"query": query, "num_results": n},
+            )
+        if r.status_code >= 400:
+            return []
+        data = r.json()
+        items = data.get("results") or data.get("data") or data.get("items") or []
+        out = []
+        for it in items[:n]:
+            out.append({
+                "title": (it.get("title") or it.get("name") or "").strip(),
+                "url": it.get("url") or it.get("link") or "",
+                "snippet": (it.get("snippet") or it.get("description") or it.get("content") or "").strip()[:280],
+            })
+        return [o for o in out if o["snippet"] or o["title"]]
+    except Exception as e:
+        log.warning("competitor_search_fallback_failed", query=query, error=repr(e))
+        return []
 
-    Lightweight version of crawl_website with a positioning focus.
 
-    Args:
-        competitor_url: Competitor homepage URL.
-    """
-    return await crawl_website.fn(url=competitor_url, max_pages=6)
+def make_crawl_tools(
+    store: Any = None,
+    project_id: int | None = None,
+    *,
+    web_base_url: str = "",
+    web_api_key: str = "",
+) -> list[Tool]:
+    """Crawl tools. When (store, project_id) are bound, `analyze_competitor`
+    PERSISTS what it crawled into the project's competitor_reads so the
+    competitor-analysis + market-gap generators work from real evidence instead
+    of the competitor's name. (Previously the crawl was thrown away.)"""
 
+    @tool
+    async def analyze_competitor(competitor_url: str) -> str:
+        """Crawl a competitor site and extract its real positioning, pricing,
+        and features. The findings are saved so the Competitor Analysis and
+        market-gap tools use this evidence, not just the competitor's name.
 
-def make_crawl_tools() -> list[Tool]:
+        Args:
+            competitor_url: Competitor homepage URL.
+        """
+        raw = await crawl_website.fn(url=competitor_url, max_pages=6)
+        try:
+            obj = json.loads(raw)
+        except json.JSONDecodeError:
+            obj = {"ok": False}
+        if not obj.get("ok"):
+            return raw
+        read = distill_crawl(obj)
+        host = (urlparse(read.get("site") or competitor_url).hostname or "").replace("www.", "")
+        read["url"] = read.get("site") or competitor_url
+        read["name"] = read.get("title") or host
+        # JS-rendered competitor sites give the lightweight crawler almost
+        # nothing — back-fill with search snippets so the analysis isn't blind.
+        if len(read.get("text") or "") < 200 and store is not None:
+            snfrom = host or competitor_url
+            snippets = await _web_search_fallback(
+                web_base_url, web_api_key, f"{snfrom} pricing positioning alternative", 5
+            )
+            if snippets:
+                read["search_snippets"] = snippets
+                read["source"] = "search"
+        if store is not None and project_id is not None:
+            try:
+                store.add_competitor_read(project_id, read)
+            except Exception as e:
+                log.warning("persist_competitor_read_failed", error=repr(e))
+        return _dump_capped(obj)
+
     return [crawl_website, analyze_competitor]

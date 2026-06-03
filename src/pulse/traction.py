@@ -196,19 +196,9 @@ Rules:
 
 
 def _parse_json(raw: str) -> Any | None:
-    if not raw:
-        return None
-    s = raw.strip()
-    if s.startswith("```"):
-        s = re.sub(r"^```(?:json)?\s*", "", s)
-        s = re.sub(r"\s*```\s*$", "", s)
-    m = re.search(r"\{.*\}|\[.*\]", s, flags=re.DOTALL)
-    if not m:
-        return None
-    try:
-        return json.loads(m.group(0))
-    except Exception:
-        return None
+    from .text import parse_json_lenient
+
+    return parse_json_lenient(raw)
 
 
 async def scan_traction(

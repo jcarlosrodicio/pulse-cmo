@@ -7,15 +7,17 @@ llm:
   default_temperature: 0.6
   # Pricing is approximate USD per million tokens. Edit to match the bill.
   # Set both to 0.0 to disable cost tracking for that provider.
+  # glm-5 is the default primary: faster (non-reasoning) and cheaper, so the
+  # blocking paths (recon, drafts) stay snappy. The reasoning models fall back.
   providers:
-    - name: minimax-2.5
+    - name: glm-5
       base_url: https://api.openadapter.in/v1
       api_key_env: OPENADAPTER_API_KEY
-      model: MiniMax-M2.5
+      model: 0G-GLM-5
       timeout: 120
       max_retries: 1
-      prompt_cost_per_million: 0.30
-      completion_cost_per_million: 1.20
+      prompt_cost_per_million: 0.20
+      completion_cost_per_million: 0.80
 
     - name: glm-5.1
       base_url: https://api.openadapter.in/v1
@@ -26,14 +28,14 @@ llm:
       prompt_cost_per_million: 0.30
       completion_cost_per_million: 1.20
 
-    - name: glm-5
+    - name: minimax-2.5
       base_url: https://api.openadapter.in/v1
       api_key_env: OPENADAPTER_API_KEY
-      model: 0G-GLM-5
+      model: MiniMax-M2.5
       timeout: 120
       max_retries: 1
-      prompt_cost_per_million: 0.20
-      completion_cost_per_million: 0.80
+      prompt_cost_per_million: 0.30
+      completion_cost_per_million: 1.20
 
 web:
   base_url: https://api.openadapter.in
@@ -49,4 +51,6 @@ scheduler:
   daily_minute: 0
 
 agent:
-  max_iterations: 28
+  # high enough that a full first dive reaches content + HN + Reddit (the last
+  # steps) instead of running out partway. Lower it if your model is slow.
+  max_iterations: 40

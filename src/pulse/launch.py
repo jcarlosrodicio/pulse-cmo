@@ -26,6 +26,7 @@ import structlog
 
 from .llm import LLM, Message
 from .store import ActionStore
+from .strategy_core import UNIVERSAL_GUARDRAILS
 from .tools.drafting import (
     HUMAN_TONE_RULES,
     STRICT_OUTPUT_RULES,
@@ -138,32 +139,16 @@ ARCHETYPES: dict[str, dict[str, Any]] = {
     },
 }
 
-UNIVERSAL_GUARDRAILS = [
-    "No paid ads for a no-LTV product (free / one-time) — spend never recovers.",
-    "No mass cross-posting the same link to many subreddits at once — shadowban.",
-    "Never ask for upvotes on HN / Product Hunt — gets flagged.",
-    "Don't buy followers or engagement — vanity, zero conversions.",
-    "Don't fire all channels on Day 1 — wastes one-shots on an unproven funnel.",
-    "Don't track retention on a one-time-use product — wrong yardstick.",
-    "Never launch a share product with a broken OG unfurl — instant death.",
-]
+# UNIVERSAL_GUARDRAILS now live in strategy_core (single source shared with the
+# strategy + positioning generators) — imported above.
 
 
 def _parse_json(raw: str) -> Any | None:
-    """Tolerant JSON extraction — handles code fences + leading/trailing noise."""
-    if not raw:
-        return None
-    s = raw.strip()
-    if s.startswith("```"):
-        s = re.sub(r"^```(?:json)?\s*", "", s)
-        s = re.sub(r"\s*```\s*$", "", s)
-    m = re.search(r"\{.*\}|\[.*\]", s, flags=re.DOTALL)
-    if not m:
-        return None
-    try:
-        return json.loads(m.group(0))
-    except Exception:
-        return None
+    """Tolerant JSON extraction — handles code fences, noise, and the broken
+    JSON cheap models routinely emit (unquoted keys, missing quotes)."""
+    from .text import parse_json_lenient
+
+    return parse_json_lenient(raw)
 
 
 # ---------------------------------------------------------------------------

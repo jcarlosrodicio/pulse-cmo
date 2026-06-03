@@ -16,6 +16,7 @@ dependencies = [
     "selectolax>=0.3.21",
     "apscheduler>=3.11.2",
     "python-multipart>=0.0.18",
+    "json-repair>=0.59.10",
 ]
 
 [project.scripts]

@@ -99,8 +99,10 @@ For each direct competitor (max 5), use this sub-structure:
 
 OUTPUT RULES:
 - Output ONLY the markdown above. No preface.
-- Use concrete details where possible.
-- If competitor info is sparse, say so in their bullets ("limited public info").
+- Base every competitor's bullets ONLY on the crawled evidence provided. Do NOT
+  invent pricing, features, or positioning from memory of the brand name.
+- If a competitor's evidence is thin, write "limited public info" — never guess.
+- Use concrete details where the evidence supports them.
 """
 
 
@@ -164,6 +166,21 @@ async def _build_product_information_user(project: dict[str, Any]) -> str:
     bv = project.get("brand_voice") or {}
     if bv.get("tone"):
         parts.append(f"Brand voice tone: {bv['tone']}")
+    # The richest signal: the actual crawled page text. Without this the brief
+    # was being padded out of a one-line description.
+    crawl = project.get("crawl_summary") or {}
+    txt = (crawl.get("text") or "").strip()
+    if txt:
+        parts.append(
+            "\nWHAT THE SITE ACTUALLY SAYS (crawled — base every section on THIS, "
+            "not on guesses):\n" + txt[:4500]
+        )
+    repo = crawl.get("repo")
+    if repo:
+        parts.append(
+            f"\nREPO METADATA: {repo.get('stars')} stars, {repo.get('language')}, "
+            f"license {repo.get('license')}, topics: {', '.join(repo.get('topics') or [])}"
+        )
     return "\n".join(parts)
 
 
@@ -172,11 +189,44 @@ async def _build_competitor_analysis_user(project: dict[str, Any]) -> str:
         f"Product: {project.get('name')} ({project.get('url')})",
         f"About: {project.get('description') or '(unknown)'}",
     ]
-    competitors = project.get("competitors") or []
-    if competitors:
-        parts.append("Competitors to analyze: " + ", ".join(competitors))
+    # The product's own crawl, so "Where We Win/Behind" is grounded in what the
+    # product actually is, not just its name.
+    own = (project.get("crawl_summary") or {}).get("text", "").strip()
+    if own:
+        parts.append(f"OUR OWN PRODUCT (crawled):\n{own[:1500]}")
+    reads = project.get("competitor_reads") or []
+    if reads:
+        parts.append(
+            "\nCOMPETITORS — actually crawled. Analyze each from THIS evidence, "
+            "never from memory. If a competitor's evidence is thin, say "
+            "'limited public info' rather than inventing details:"
+        )
+        for r in reads[:6]:
+            name = r.get("name") or r.get("title") or r.get("url")
+            parts.append(f"\n### {name} ({r.get('url', '')})")
+            if r.get("description"):
+                parts.append(f"pitch: {r['description']}")
+            body = (r.get("text") or "").strip()
+            if body:
+                parts.append(f"crawled text: {body[:900]}")
+            elif r.get("search_snippets"):
+                snips = " | ".join(
+                    f"{s.get('title', '')}: {s.get('snippet', '')}"
+                    for s in r["search_snippets"][:3]
+                )
+                parts.append(f"search snippets: {snips[:600]}")
+            else:
+                parts.append("(crawl returned little — note limited public info)")
     else:
-        parts.append("Competitors: none specified yet — note this in the brief.")
+        competitors = project.get("competitors") or []
+        if competitors:
+            parts.append(
+                "Competitors (names only — not yet crawled, so mark each "
+                "'limited public info' rather than inventing details): "
+                + ", ".join(competitors)
+            )
+        else:
+            parts.append("Competitors: none specified yet — note this in the brief.")
     return "\n".join(parts)
 
 
@@ -228,6 +278,12 @@ async def regenerate_document_for_project(
                 llm, system=BRAND_VOICE_SYSTEM, user=user_input
             )
         title = "Brand Voice"
+    elif kind == "positioning":
+        from ..strategy_core import generate_positioning
+
+        await generate_positioning(llm, store, project_id)
+        doc = store.get_document_by_kind(project_id, "positioning")
+        return int(doc["id"]) if doc else 0
     elif kind == "marketing_strategy":
         # Pull from the latest 'strategy' action if present.
         actions = store.list_actions(project_id)

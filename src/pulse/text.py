@@ -8,6 +8,7 @@ provides a single function the LLM layer + tool layer call to scrub them.
 
 from __future__ import annotations
 
+import json
 import re
 
 # Catches:
@@ -129,3 +130,62 @@ def strip_reasoning(text: str) -> str:
     # collapse the blank lines we may have just created
     out = re.sub(r"\n{3,}", "\n\n", out).strip()
     return out
+
+
+# CJK / fullwidth ranges. Cheap open models (MiniMax especially) occasionally
+# emit a stray Chinese word inside an otherwise-English answer ("rate-limit替代").
+_CJK_RE = re.compile(
+    r"[　-〿぀-ヿ㐀-䶿一-鿿＀-￯]"
+)
+
+
+_LATIN_RE = re.compile(r"[A-Za-z]")
+
+
+def strip_stray_cjk(text: str) -> str:
+    """Drop stray CJK characters from predominantly-Latin text — a model glitch
+    (MiniMax: "rate-limit替代"), not a genuinely CJK document, which we leave
+    untouched. Heuristic: strip only when Latin letters far outnumber CJK."""
+    if not text:
+        return text
+    hits = _CJK_RE.findall(text)
+    if not hits:
+        return text
+    latin = len(_LATIN_RE.findall(text))
+    if latin <= 4 * len(hits):  # not predominantly Latin -> probably real CJK
+        return text
+    out = _CJK_RE.sub("", text)
+    return re.sub(r"[ \t]{2,}", " ", out)
+
+
+def parse_json_lenient(raw: str):
+    """Parse JSON from model output, tolerating the usual LLM breakage.
+
+    Cheap models routinely emit JSON with unquoted keys, missing quotes, or
+    trailing junk. We try strict json first (fast path), then fall back to
+    json-repair so a flaky generation degrades to a usable object instead of
+    silently becoming an empty default. Returns the object or None.
+    """
+    if not raw:
+        return None
+    s = strip_reasoning(raw).strip()
+    if s.startswith("```"):
+        s = re.sub(r"^```(?:json)?\s*", "", s)
+        s = re.sub(r"\s*```\s*$", "", s)
+    m = re.search(r"\{.*\}|\[.*\]", s, flags=re.DOTALL)
+    candidate = m.group(0) if m else s
+    for attempt in (candidate, s):
+        try:
+            return json.loads(attempt)
+        except Exception:
+            pass
+    try:
+        from json_repair import repair_json
+
+        for attempt in (candidate, s):
+            obj = repair_json(attempt, return_objects=True)
+            if obj not in (None, "", [], {}):
+                return obj
+    except Exception:
+        pass
+    return None

@@ -3,23 +3,22 @@
 from __future__ import annotations
 
 import json
-import re
 
 import structlog
 
 from ..llm import LLM, Message
 from ..store import ActionStore
+from ..strategy_core import (
+    ANALYST_STYLE,
+    GUARDRAIL_BLOCK,
+    gather_evidence,
+    generate_positioning,
+    render_evidence,
+)
+from ..text import parse_json_lenient, strip_stray_cjk
 from .registry import Tool, tool
 
 log = structlog.get_logger()
-
-
-def _strip_code_fence(text: str) -> str:
-    text = text.strip()
-    fenced = re.search(r"```(?:json)?\s*(.*?)```", text, flags=re.DOTALL)
-    if fenced:
-        return fenced.group(1).strip()
-    return text
 
 
 def make_strategy_tools(llm: LLM, store: ActionStore, project_id: int) -> list[Tool]:
@@ -59,10 +58,8 @@ def make_strategy_tools(llm: LLM, store: ActionStore, project_id: int) -> list[T
             temperature=0.3,
             max_tokens=600,
         )
-        raw = _strip_code_fence(raw)
-        try:
-            profile = json.loads(raw)
-        except json.JSONDecodeError:
+        profile = parse_json_lenient(raw)
+        if not isinstance(profile, dict):
             return json.dumps({"ok": False, "error": "could not parse voice profile", "raw": raw[:500]})
 
         profile["samples"] = [s.strip() for s in writing_samples[:3] if s.strip()]
@@ -70,11 +67,32 @@ def make_strategy_tools(llm: LLM, store: ActionStore, project_id: int) -> list[T
         return json.dumps({"ok": True, "profile": profile})
 
     @tool
-    async def generate_marketing_strategy(timeframe_days: int = 30) -> str:
-        """Generate a marketing strategy for the next N days.
+    async def generate_positioning_doc() -> str:
+        """Run the strategic diagnosis (situation, ICP, value prop, the wedge,
+        ranked channels with leading indicators, measurement, open questions).
 
-        Uses everything the agent has learned this run (product info, SEO state,
-        competitors) to output a concrete 30/60/90 day plan. Saved as an action.
+        Call this on the first dive AFTER the crawl + brand voice + audits +
+        (ideally) one or two `analyze_competitor` calls, and BEFORE
+        `generate_marketing_strategy` — the strategy is built on this. It reads
+        the persisted evidence itself; no arguments needed. Saves the
+        'positioning' document.
+        """
+        pos = await generate_positioning(llm, store, project_id)
+        if not pos:
+            return json.dumps({"ok": False, "error": "could not produce positioning"})
+        wedge = (pos.get("wedge") or {}).get("move", "")
+        return json.dumps({"ok": True, "wedge": wedge, "value_prop": pos.get("value_prop", "")})
+
+    @tool
+    async def generate_marketing_strategy(timeframe_days: int = 30) -> str:
+        """Generate an evidence-grounded marketing plan for the next N days.
+
+        Reads everything gathered this run — the crawl, the founder's brief
+        (goal / ICP / baseline / constraints), the positioning diagnosis, SEO +
+        traction state, and the REAL competitor reads — and turns the wedge into
+        a sequenced plan tied to the founder's actual goal, with a leading
+        indicator on every item. If positioning hasn't been diagnosed yet it
+        does that first. Saved as an action.
 
         Args:
             timeframe_days: 30, 60, or 90.
@@ -85,25 +103,42 @@ def make_strategy_tools(llm: LLM, store: ActionStore, project_id: int) -> list[T
         if project is None:
             return json.dumps({"ok": False, "error": "project not found"})
 
+        ev = gather_evidence(store, project_id)
+        # The plan is only as good as its diagnosis — ensure one exists.
+        if not ev.get("positioning"):
+            await generate_positioning(llm, store, project_id)
+            ev = gather_evidence(store, project_id)
+
+        evidence_block = render_evidence(
+            ev, include=("product", "brief", "positioning", "seo", "traction", "competitors")
+        )
         system = (
-            "You are a marketing strategist for indie founders. Output a concrete, "
-            "no-fluff plan in markdown. Use H2 sections for each phase. Every "
-            "bullet should be something the founder can ship in <2 hours. No "
-            "'leverage synergies' nonsense. Specifics > frameworks."
+            "You are a head of growth writing the next-"
+            f"{timeframe_days}-day marketing plan for an indie founder. You have a "
+            "positioning diagnosis, the founder's brief, and real evidence. Turn "
+            "the wedge into a sequenced plan — not a generic channel checklist.\n\n"
+            + ANALYST_STYLE
+            + "\n\n"
+            + GUARDRAIL_BLOCK
+            + "\n\nOUTPUT (markdown):\n"
+            "- 2-3 lines: the situation and the ONE bet this plan makes (the wedge).\n"
+            "- An H2 per phase (Week 1, Week 2, ...). Every bullet is a concrete "
+            "action shippable in under 2 hours, and ends with, in italics, the "
+            "leading indicator it should move + the channel. No vague "
+            "'engage the community'.\n"
+            "- End with one or two 'if X then Y' decision rules and an explicit "
+            "'stop doing' line.\n"
+            "Tie the plan to the brief's goal and success metric. If the founder "
+            "gave a baseline, the plan must visibly try to move it. Never propose "
+            "anything they said already flopped."
         )
-        user = (
-            f"product: {project.get('name')} ({project.get('url')})\n"
-            f"description: {project.get('description') or '(none)'}\n"
-            f"competitors: {', '.join(project.get('competitors') or []) or '(none known)'}\n"
-            f"timeframe: next {timeframe_days} days\n\n"
-            "Write the plan."
-        )
+        user = evidence_block + f"\n\nTIMEFRAME: next {timeframe_days} days.\n\nWrite the plan."
         plan = await llm.complete(
             [Message(role="system", content=system), Message(role="user", content=user)],
-            temperature=0.55,
-            max_tokens=2000,
+            temperature=0.5,
+            max_tokens=2400,
         )
-        # Save under last run id (fetch most recent run for project)
+        plan = strip_stray_cjk(plan)
         run_id = store.latest_run_id(project_id)
         action_id = store.create_action(
             project_id=project_id,
@@ -140,50 +175,53 @@ def make_strategy_tools(llm: LLM, store: ActionStore, project_id: int) -> list[T
         return json.dumps({"ok": True, "updated": list(updates.keys())})
 
     @tool
-    async def identify_market_gaps(competitor_summaries: list[str]) -> str:
+    async def identify_market_gaps(competitor_summaries: list[str] = []) -> str:
         """Identify positioning gaps the user can exploit vs their competitors.
 
-        Pass 2-5 short summaries of competitor positioning (after analyze_competitor).
-        Returns 3-5 concrete gap opportunities the user could lean into, each saved
-        as a 'market_gap' action.
+        Uses the REAL competitor reads Pulse crawled (via analyze_competitor) and
+        the positioning diagnosis — you don't need to pass anything. Optionally
+        pass extra one-line competitor notes to fold in. Returns 3-5 concrete gap
+        opportunities, each saved as a 'market_gap' action.
 
         Args:
-            competitor_summaries: List of competitor positioning summaries (1-2 sentences each).
+            competitor_summaries: Optional extra competitor notes (1-2 sentences each).
         """
-        if not competitor_summaries:
-            return json.dumps({"ok": False, "error": "competitor_summaries required"})
         project = store.get_project(project_id)
         if not project:
             return json.dumps({"ok": False, "error": "project not found"})
 
-        comp_block = "\n".join(f"- {s.strip()}" for s in competitor_summaries[:6] if s.strip())
+        ev = gather_evidence(store, project_id)
+        evidence_block = render_evidence(
+            ev, include=("product", "brief", "positioning", "competitors")
+        )
+        extra = "\n".join(f"- {s.strip()}" for s in (competitor_summaries or [])[:6] if s.strip())
+        if not ev.get("competitor_reads") and not extra:
+            return json.dumps({"ok": False, "error": "no competitor evidence — run analyze_competitor first"})
+        if extra:
+            evidence_block += f"\n\nADDITIONAL COMPETITOR NOTES:\n{extra}"
+
         system = (
-            "You analyze competitive positioning and surface unclaimed angles. "
-            "Output STRICT JSON ONLY in this shape:\n"
+            "You analyze competitive positioning and surface unclaimed angles, "
+            "grounded in the crawled competitor evidence.\n\n"
+            + ANALYST_STYLE
+            + "\n\nOutput STRICT JSON ONLY in this shape:\n"
             "{\"gaps\": [\n"
             "  {\"title\": \"<short title, max 80 chars>\",\n"
-            "   \"opportunity\": \"<2-3 sentences on the gap + why we can win it>\",\n"
+            "   \"opportunity\": \"<2-3 sentences on the gap + why THIS product can win it, citing the evidence>\",\n"
             "   \"first_move\": \"<concrete first thing to ship>\"}\n"
             "]}\n"
             "Aim for 3-5 gaps. Be sharp — generic gaps like 'better UX' don't count. "
             "Look at pricing posture, audience segments, distribution channels, "
             "missing features, ideological positioning. Output JSON only."
         )
-        user = (
-            f"Product: {project.get('name')} ({project.get('url')})\n"
-            f"About: {project.get('description') or '(unknown)'}\n\n"
-            f"Competitors:\n{comp_block}\n\n"
-            "Find the gaps."
-        )
+        user = evidence_block + "\n\nFind the gaps. Output only the JSON object."
         raw = await llm.complete(
             [Message(role="system", content=system), Message(role="user", content=user)],
-            temperature=0.55,
-            max_tokens=1200,
+            temperature=0.5,
+            max_tokens=1300,
         )
-        raw = _strip_code_fence(raw)
-        try:
-            parsed = json.loads(raw)
-        except json.JSONDecodeError:
+        parsed = parse_json_lenient(raw)
+        if not isinstance(parsed, dict):
             return json.dumps({"ok": False, "error": "could not parse JSON", "raw": raw[:400]})
 
         gaps = parsed.get("gaps") or []
@@ -207,4 +245,10 @@ def make_strategy_tools(llm: LLM, store: ActionStore, project_id: int) -> list[T
             action_ids.append(aid)
         return json.dumps({"ok": True, "action_ids": action_ids, "gaps_found": len(action_ids)})
 
-    return [extract_brand_voice, generate_marketing_strategy, update_project_info, identify_market_gaps]
+    return [
+        extract_brand_voice,
+        generate_positioning_doc,
+        generate_marketing_strategy,
+        update_project_info,
+        identify_market_gaps,
+    ]
