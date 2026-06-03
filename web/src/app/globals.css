@@ -203,19 +203,6 @@ h1, h2, h3, h4 { font-family: var(--font-sans); letter-spacing: -0.012em; }
   to   { opacity: 1; }
 }
 
-/* —— launch CTA — flagship header button —— */
-.launch-cta {
-  color: var(--accent-fg);
-  background: linear-gradient(135deg, var(--accent) 0%, color-mix(in srgb, var(--accent) 78%, #ff7849) 100%);
-  border: 1px solid var(--accent-strong);
-  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.18) inset, 0 2px 10px var(--accent-glow);
-  transition: box-shadow 180ms ease, transform 140ms ease, filter 160ms ease;
-}
-.launch-cta:hover {
-  filter: brightness(1.06);
-  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.22) inset, 0 3px 16px var(--accent-glow);
-}
-
 /* —— launch workspace (near-full-screen panel) —— */
 .launch-panel {
   position: fixed;

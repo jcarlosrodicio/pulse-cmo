@@ -8,12 +8,16 @@ import {
   type AgentEvent,
   type DocumentKind,
   type Project,
+  type ProjectDocument,
   type TargetKind,
   type WritingInstructions,
 } from "@/lib/api";
+import { buildPlanMarkdown, buildTodoHtml, downloadFile, slugify } from "@/lib/export";
 import { DocumentSheet } from "@/components/company/DocumentSheet";
 import { Onboarding } from "@/components/Onboarding";
 import { AddProjectModal } from "@/components/AddProjectModal";
+import { MarketingBriefModal } from "@/components/MarketingBriefModal";
+import { ProjectDangerModal } from "@/components/ProjectDangerModal";
 import { Header } from "@/components/layout/Header";
 import { Shell } from "@/components/layout/Shell";
 import { CompanySidebar } from "@/components/company/CompanySidebar";
@@ -55,6 +59,8 @@ export default function Page() {
   const [activeId, setActiveId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showAddModal, setShowAddModal] = useState(false);
+  // project awaiting its marketing brief before the first dive starts
+  const [briefFor, setBriefFor] = useState<number | null>(null);
 
   const refreshProjects = useCallback(
     async (selectNewId?: number) => {
@@ -90,10 +96,34 @@ export default function Page() {
     }
   }, [activeId]);
 
+  // If the active project was created but never dived, its brief is still the
+  // pending step — reopen it once on load so a refresh doesn't strand the user
+  // past the gate. Derived from server state (no runs yet), so it self-clears
+  // the moment a dive starts. Fires once per mount.
+  const autoBriefChecked = useRef(false);
+  useEffect(() => {
+    if (autoBriefChecked.current || projects === null || projects.length === 0) return;
+    autoBriefChecked.current = true;
+    const active = projects.find((p) => p.id === activeId) ?? projects[0];
+    if (active && !active.latest_run) setBriefFor(active.id);
+  }, [projects, activeId]);
+
   async function handleCreate(url: string) {
-    const p = await api.createProject({ url, start_dive: true });
+    // Create the project but DON'T auto-start the dive — first collect the
+    // marketing brief (recon proposes, founder confirms), then the dive runs
+    // with a real goal/ICP/baseline in context.
+    const p = await api.createProject({ url, start_dive: false });
     await refreshProjects(p.id);
     setShowAddModal(false);
+    setBriefFor(p.id);
+  }
+
+  // After a complete wipe: re-list and, if the active project was the one
+  // deleted, fall back to another (or the onboarding screen if none remain).
+  async function handleProjectDeleted(deletedId: number) {
+    const list = await api.listProjects();
+    setProjects(list);
+    setActiveId((cur) => (cur === deletedId ? list[0]?.id ?? null : cur));
   }
 
   if (error) {
@@ -132,6 +162,10 @@ export default function Page() {
         onSwitchProject={(p) => setActiveId(p.id)}
         onAddNewProject={() => setShowAddModal(true)}
         onProjectsRefresh={refreshProjects}
+        onProjectDeleted={handleProjectDeleted}
+        onOpenBrief={(id) => setBriefFor(id)}
+        briefForId={briefFor}
+        onCloseBrief={() => setBriefFor(null)}
       />
       <AddProjectModal
         open={showAddModal}
@@ -148,12 +182,20 @@ function Dashboard({
   onSwitchProject,
   onAddNewProject,
   onProjectsRefresh,
+  onProjectDeleted,
+  onOpenBrief,
+  briefForId,
+  onCloseBrief,
 }: {
   project: Project;
   projects: Project[];
   onSwitchProject: (p: Project) => void;
   onAddNewProject: () => void;
   onProjectsRefresh: (selectId?: number) => Promise<Project[]>;
+  onProjectDeleted: (id: number) => Promise<void>;
+  onOpenBrief: (id: number) => void;
+  briefForId: number | null;
+  onCloseBrief: () => void;
 }) {
   const [actions, setActions] = useState<Action[]>([]);
   const [selectedAction, setSelectedAction] = useState<Action | null>(null);
@@ -185,6 +227,7 @@ function Dashboard({
   const [showLaunch, setShowLaunch] = useState(false);
   const [showVersions, setShowVersions] = useState(false);
   const [showShortcuts, setShowShortcuts] = useState(false);
+  const [showDanger, setShowDanger] = useState(false);
   const [generatingTarget, setGeneratingTarget] = useState<TargetKind | null>(null);
   const [mobilePane, setMobilePane] = useState<"company" | "analytics" | "actions" | "chat">("actions");
   const toast = useToast();
@@ -387,6 +430,28 @@ function Dashboard({
   const lastRunCostUsd = lastDoneRun?.cost_usd ?? null;
   const lastRunTokens = lastDoneRun?.total_tokens ?? null;
 
+  // Export: a markdown plan (website fixes + steps/actions + strategy) and a
+  // standalone, trackable HTML to-do checklist of everything to do.
+  const handleExport = useCallback(
+    async (kind: "plan" | "todo") => {
+      const slug = slugify(project.name);
+      if (kind === "plan") {
+        let docs: ProjectDocument[] = [];
+        try {
+          docs = await api.listDocuments(project.id);
+        } catch {
+          /* docs are optional in the export */
+        }
+        logConsole("meta", `exporting action plan (.md) for ${project.name}`);
+        downloadFile(`${slug}-plan.md`, buildPlanMarkdown(project, actions, docs), "text/markdown;charset=utf-8");
+      } else {
+        logConsole("meta", `exporting to-do checklist (.html) for ${project.name}`);
+        downloadFile(`${slug}-todo.html`, buildTodoHtml(project, actions), "text/html;charset=utf-8");
+      }
+    },
+    [project, actions, logConsole],
+  );
+
   const header = useMemo(
     () => (
       <Header
@@ -400,15 +465,9 @@ function Dashboard({
         setTerminalState={setTerminalState}
         hasFirstDive={hasFirstDive}
         onRun={() => start(hasFirstDive ? "daily" : "first_dive")}
-        onRedoFirstDive={() => {
-          logConsole("meta", "redoing first dive — full re-scan");
-          toast.push({
-            kind: "info",
-            title: "Redoing first dive",
-            detail: "Pulse is re-running the full deep scan.",
-          });
-          start("first_dive");
-        }}
+        onRedoFirstDive={() => onOpenBrief(project.id)}
+        onManageProject={() => setShowDanger(true)}
+        onExport={handleExport}
         onOpenProviderSettings={() => setShowProviderSettings(true)}
         onOpenLaunch={() => setShowLaunch(true)}
         onOpenVersions={() => setShowVersions(true)}
@@ -418,7 +477,7 @@ function Dashboard({
         lastRunTokens={lastRunTokens}
       />
     ),
-    [project, projects, onSwitchProject, onAddNewProject, isStreaming, events, syntheticLog, terminalState, hasFirstDive, start, runStatus, lastRunCostUsd, lastRunTokens],
+    [project, projects, onSwitchProject, onAddNewProject, isStreaming, events, syntheticLog, terminalState, hasFirstDive, start, runStatus, lastRunCostUsd, lastRunTokens, handleExport],
   );
 
   return (
@@ -501,6 +560,29 @@ function Dashboard({
         projectId={project.id}
         open={showVersions}
         onClose={() => setShowVersions(false)}
+      />
+
+      <MarketingBriefModal
+        projectId={project.id}
+        open={briefForId === project.id}
+        onClose={onCloseBrief}
+        onStartDive={async () => {
+          // go through useRunStream so the console attaches + streams live
+          // (exactly like "Run now"/redo) instead of a detached api.startRun
+          await start("first_dive");
+          onProjectsRefresh();
+        }}
+      />
+
+      <ProjectDangerModal
+        project={project}
+        open={showDanger}
+        onClose={() => setShowDanger(false)}
+        onRedo={() => onOpenBrief(project.id)}
+        onDeleted={async () => {
+          toast.push({ kind: "info", title: "Project deleted", detail: `${project.name} was wiped.` });
+          await onProjectDeleted(project.id);
+        }}
       />
 
       <KeyboardShortcuts open={showShortcuts} onClose={() => setShowShortcuts(false)} />

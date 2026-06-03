@@ -32,8 +32,8 @@ import { Skeleton, SkeletonText } from "../ui/Skeleton";
 type Tab = "health" | "traction" | "links" | "technical" | "geo" | "checks";
 
 const TABS: { id: Tab; label: string; icon: typeof Activity }[] = [
-  { id: "health", label: "Health", icon: Activity },
   { id: "traction", label: "Traction", icon: Radar },
+  { id: "health", label: "Health", icon: Activity },
   { id: "links", label: "Links", icon: Link2 },
   { id: "geo", label: "AI / GEO", icon: Brain },
   { id: "technical", label: "Technical", icon: Wrench },
@@ -47,7 +47,7 @@ export function AnalyticsPanel({
   project: Project;
   isInitialDive?: boolean;
 }) {
-  const [tab, setTab] = useState<Tab>("health");
+  const [tab, setTab] = useState<Tab>("traction");
 
   return (
     <div className="h-full flex flex-col">

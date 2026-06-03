@@ -135,12 +135,38 @@ export type Project = {
   traction_summary: TractionSummary | null;
   geo_summary: GeoSummary | null;
   links_summary: LinksSummary | null;
+  brief: Brief | null;
   created_at: string;
   // computed by the server when fetched via GET /projects[/id]
   latest_run?: RunSummary | null;
   active_run_id?: number | null;
   action_counts?: Record<string, number>;
   initial_run_id?: number | null;
+};
+
+// The marketing brief — the strategic input the first dive collects from the
+// founder (some fields pre-filled by recon) before the heavy run. Mirrors
+// src/pulse/brief.py.
+export type Brief = {
+  goal?: string;
+  goal_metric?: string;
+  horizon_days?: number;
+  icp?: string;
+  not_for?: string;
+  baseline?: string;
+  tried?: string;
+  budget?: string;
+  hours_per_week?: string;
+  can_produce?: string[];
+  off_limits?: string;
+  wedge_hypothesis?: string;
+  assets?: string;
+};
+
+export type ReconResult = {
+  brief: Brief;
+  crawl: { title: string; description: string; pages_fetched: number; ok: boolean };
+  project: Project;
 };
 
 export type ActionType =
@@ -229,6 +255,7 @@ export type AgentEvent =
 export type DocumentKind =
   | "product_information"
   | "competitor_analysis"
+  | "positioning"
   | "brand_voice"
   | "marketing_strategy";
 
@@ -530,6 +557,27 @@ export const api = {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(patch),
       }),
+    );
+  },
+  // Fast pre-dive pass: crawl + propose a marketing brief the founder confirms.
+  // Accepts an AbortSignal so the modal can cancel a stale/duplicate request
+  // (React StrictMode fires effects twice in dev).
+  async recon(projectId: number, signal?: AbortSignal) {
+    return json<ReconResult>(
+      await fetch(`${API}/projects/${projectId}/recon`, { method: "POST", signal }),
+    );
+  },
+  // The LLM brief pre-fill, fetched in the background after recon (slow
+  // reasoning models must not block the modal). Returns only fields it filled.
+  async suggestBrief(projectId: number, signal?: AbortSignal) {
+    return json<{ suggested: Partial<Brief> }>(
+      await fetch(`${API}/projects/${projectId}/brief/suggest`, { method: "POST", signal }),
+    );
+  },
+  // Complete, irreversible wipe of a project and everything it owns.
+  async deleteProject(id: number) {
+    return json<{ ok: boolean; deleted: number }>(
+      await fetch(`${API}/projects/${id}`, { method: "DELETE" }),
     );
   },
 

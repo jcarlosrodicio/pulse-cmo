@@ -55,11 +55,11 @@ export function AddProjectModal({
           >
             {busy ? (
               <>
-                <Loader2 size={12} className="animate-spin" /> Setting up…
+                <Loader2 size={12} className="animate-spin" /> Reading your site…
               </>
             ) : (
               <>
-                <Sparkles size={12} /> Start first dive
+                <Sparkles size={12} /> Continue
               </>
             )}
           </button>
@@ -72,7 +72,7 @@ export function AddProjectModal({
             <PulseLogo size={16} />
           </span>
           <span className="text-[11.5px] text-fg-dim">
-            Drop a URL — Pulse will infer the rest.
+            Drop a URL — Pulse reads the site, then asks a few quick questions.
           </span>
         </div>
 
@@ -92,11 +92,10 @@ export function AddProjectModal({
         </label>
 
         <ul className="text-[11.5px] text-muted space-y-1 pt-1.5 list-none">
-          <li>· crawl the site, infer name + description + competitors</li>
-          <li>· audit on-page SEO and log fixes</li>
-          <li>· extract brand voice from your existing copy</li>
-          <li>· surface HN + Reddit threads worth replying to</li>
-          <li>· draft a tweet, an article, and a 30-day strategy</li>
+          <li>· crawl the site + infer name, description, competitors</li>
+          <li>· a 2-minute brief: your goal, who it&apos;s for, what you&apos;ve tried</li>
+          <li>· then the dive: positioning, SEO/GEO audits, a grounded 30-day plan</li>
+          <li>· starter content + HN/Reddit threads worth replying to</li>
         </ul>
 
         {error && (

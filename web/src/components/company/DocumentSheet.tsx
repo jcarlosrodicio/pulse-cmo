@@ -320,6 +320,7 @@ function humanKind(kind: DocumentKind): string {
   return {
     product_information: "Product Information",
     competitor_analysis: "Competitor Analysis",
+    positioning: "Positioning & Strategy",
     brand_voice: "Brand Voice",
     marketing_strategy: "Marketing Strategy",
   }[kind];

@@ -9,6 +9,7 @@ import {
   BookOpen,
   Mic2,
   ScanSearch,
+  Target,
   X,
   Plus,
   ChevronRight,
@@ -35,6 +36,7 @@ function SectionHeader({ children }: { children: React.ReactNode }) {
 
 const DOCS: { id: DocumentKind | "articles"; label: string; icon: typeof FileText }[] = [
   { id: "product_information", label: "Product Information", icon: FileText },
+  { id: "positioning", label: "Positioning & Strategy", icon: Target },
   { id: "competitor_analysis", label: "Competitor Analysis", icon: ScanSearch },
   { id: "brand_voice", label: "Brand Voice", icon: Mic2 },
   { id: "marketing_strategy", label: "Marketing Strategy", icon: Compass },

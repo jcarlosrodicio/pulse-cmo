@@ -11,6 +11,10 @@ import {
   Sparkles,
   Rocket,
   History,
+  Trash2,
+  Download,
+  FileText,
+  ListChecks,
 } from "lucide-react";
 import type { Project, AgentEvent } from "@/lib/api";
 import { TerminalBar, type TerminalState } from "./TerminalBar";
@@ -30,6 +34,8 @@ export function Header({
   hasFirstDive,
   onRun,
   onRedoFirstDive,
+  onManageProject,
+  onExport,
   onOpenProviderSettings,
   onOpenLaunch,
   onOpenVersions,
@@ -50,6 +56,8 @@ export function Header({
   hasFirstDive: boolean;
   onRun: () => void;
   onRedoFirstDive: () => void;
+  onManageProject: () => void;
+  onExport: (kind: "plan" | "todo") => void;
   onOpenProviderSettings: () => void;
   onOpenLaunch: () => void;
   onOpenVersions: () => void;
@@ -98,26 +106,18 @@ export function Header({
 
         <div className="flex-1" />
 
-        {/* launch mode — flagship action */}
-        <button
-          onClick={onOpenLaunch}
-          className="launch-cta hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-semibold text-[12.5px] btn-press"
-          title="Launch mode — archetype-driven GTM plan"
-        >
-          <Rocket size={13} />
-          Launch
-        </button>
-
-        {/* thin separator before the run controls */}
-        <span className="hidden sm:block w-px h-5 self-center" style={{ background: "var(--border-strong)" }} />
-
-        {/* run split-button */}
+        {/* run split-button (Launch now lives in its dropdown) */}
         <RunSplitButton
           isStreaming={isStreaming}
           hasFirstDive={hasFirstDive}
           onRun={onRun}
           onRedoFirstDive={onRedoFirstDive}
+          onManageProject={onManageProject}
+          onOpenLaunch={onOpenLaunch}
         />
+
+        {/* export — choose the markdown plan or the trackable to-do checklist */}
+        <ExportButton onExport={onExport} />
 
         <button
           onClick={onOpenVersions}
@@ -162,11 +162,15 @@ function RunSplitButton({
   hasFirstDive,
   onRun,
   onRedoFirstDive,
+  onManageProject,
+  onOpenLaunch,
 }: {
   isStreaming: boolean;
   hasFirstDive: boolean;
   onRun: () => void;
   onRedoFirstDive: () => void;
+  onManageProject: () => void;
+  onOpenLaunch: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -231,6 +235,16 @@ function RunSplitButton({
           role="menu"
         >
           <RunMenuItem
+            icon={<Rocket size={13} />}
+            title="Launch mode"
+            subtitle="Archetype-driven GTM plan for a launch"
+            onClick={() => {
+              setOpen(false);
+              onOpenLaunch();
+            }}
+          />
+          <div style={{ borderTop: "1px solid var(--border)" }} />
+          <RunMenuItem
             icon={<Sparkles size={13} />}
             title="Run daily pass"
             subtitle="Incremental — 3-5 quick actions"
@@ -245,18 +259,92 @@ function RunSplitButton({
           <RunMenuItem
             icon={<RotateCcw size={13} />}
             title="Redo first dive"
-            subtitle="Full re-scan: crawl, audit, drafts"
+            subtitle="Review the brief, then re-run the full scan"
             onClick={() => {
               setOpen(false);
-              if (
-                window.confirm(
-                  "Redo the full first dive? This re-runs the deep scan (crawl, audit, brand voice, drafts) and may overwrite generated documents.",
-                )
-              ) {
-                onRedoFirstDive();
-              }
+              onRedoFirstDive();
             }}
             tone="warn"
+          />
+          <div style={{ borderTop: "1px solid var(--border)" }} />
+          <RunMenuItem
+            icon={<Trash2 size={13} />}
+            title="Delete or redo project…"
+            subtitle="Wipe everything, or start the dive over"
+            onClick={() => {
+              setOpen(false);
+              onManageProject();
+            }}
+            tone="danger"
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ExportButton({ onExport }: { onExport: (kind: "plan" | "todo") => void }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    function onMouse(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    }
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") setOpen(false);
+    }
+    document.addEventListener("mousedown", onMouse);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onMouse);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  return (
+    <div ref={ref} className="relative hidden sm:block shrink-0">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border font-medium text-[12.5px] btn-press text-muted-strong hover:text-fg transition-colors"
+        style={{ borderColor: "var(--border-strong)" }}
+        title="Export — markdown plan or trackable to-do checklist"
+      >
+        <Download size={13} />
+        Export
+        <ChevronDown size={12} />
+      </button>
+      {open && (
+        <div
+          className="absolute right-0 top-full mt-1.5 w-[270px] rounded-xl border z-50"
+          style={{
+            background: "var(--surface)",
+            borderColor: "var(--border-strong)",
+            boxShadow: "0 8px 24px rgba(0,0,0,0.25)",
+          }}
+          role="menu"
+        >
+          <RunMenuItem
+            icon={<FileText size={13} />}
+            title="Action plan (.md)"
+            subtitle="Site fixes + steps + strategy, editable markdown"
+            onClick={() => {
+              setOpen(false);
+              onExport("plan");
+            }}
+          />
+          <div style={{ borderTop: "1px solid var(--border)" }} />
+          <RunMenuItem
+            icon={<ListChecks size={13} />}
+            title="To-do checklist (.html)"
+            subtitle="Everything to do, trackable in any browser"
+            onClick={() => {
+              setOpen(false);
+              onExport("todo");
+            }}
           />
         </div>
       )}
@@ -279,7 +367,7 @@ function RunMenuItem({
   shortcut?: string;
   onClick: () => void;
   disabled?: boolean;
-  tone?: "warn";
+  tone?: "warn" | "danger";
 }) {
   return (
     <button
@@ -290,7 +378,7 @@ function RunMenuItem({
     >
       <span
         className="mt-0.5"
-        style={{ color: tone === "warn" ? "var(--warn)" : "var(--accent)" }}
+        style={{ color: tone === "danger" ? "var(--danger)" : tone === "warn" ? "var(--warn)" : "var(--accent)" }}
       >
         {icon}
       </span>
