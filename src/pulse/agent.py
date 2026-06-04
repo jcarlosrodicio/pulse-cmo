@@ -6,6 +6,7 @@ append results to history → loop until plain text or max_iterations hit.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator
@@ -221,6 +222,16 @@ class Agent:
                 yield {"type": "done", "iterations": iteration, "content": full_text}
                 return
 
+            # Announce every tool call, then dispatch the independent ones
+            # CONCURRENTLY (a turn often fans out crawl + audits + searches).
+            # Dedup is decided sequentially (deterministic); results are emitted
+            # in the original order so the history stays well-formed.
+            _DUP = json.dumps({
+                "ok": False,
+                "error": "duplicate_call",
+                "note": "this exact tool + args was already called this turn. change strategy or stop.",
+            })
+            parsed: list[tuple[str, str, dict[str, Any]]] = []
             for idx, acc in sorted(tc_acc.items()):
                 call_id = acc["id"] or f"call_{idx}"
                 name = acc["name"]
@@ -229,33 +240,26 @@ class Agent:
                 except json.JSONDecodeError:
                     args = {}
                 log.info("tool_call", name=name, arguments=args)
+                yield {"type": "tool_call", "id": call_id, "name": name, "arguments": args}
+                parsed.append((call_id, name, args))
 
-                yield {
-                    "type": "tool_call",
-                    "id": call_id,
-                    "name": name,
-                    "arguments": args,
-                }
-
+            tasks: dict[str, asyncio.Task] = {}
+            is_dup: set[str] = set()
+            for call_id, name, args in parsed:
                 call_key = f"{name}:{json.dumps(args, sort_keys=True, default=str)}"
                 if call_key in seen_calls:
-                    result = json.dumps(
-                        {
-                            "ok": False,
-                            "error": "duplicate_call",
-                            "note": "this exact tool + args was already called this turn. change strategy or stop.",
-                        }
-                    )
+                    is_dup.add(call_id)
                 else:
-                    result = await self.registry.dispatch(name, args)
-                seen_calls.add(call_key)
+                    seen_calls.add(call_key)
+                    tasks[call_id] = asyncio.create_task(self.registry.dispatch(name, args))
 
-                yield {
-                    "type": "tool_result",
-                    "id": call_id,
-                    "name": name,
-                    "result": result,
-                }
+            results: dict[str, str] = {}
+            for cid, task in tasks.items():
+                results[cid] = await task
+
+            for call_id, name, args in parsed:
+                result = _DUP if call_id in is_dup else results[call_id]
+                yield {"type": "tool_result", "id": call_id, "name": name, "result": result}
                 history.append(
                     {"role": "tool", "tool_call_id": call_id, "content": result}
                 )
