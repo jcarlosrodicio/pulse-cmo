@@ -37,6 +37,7 @@ from .tools.reddit import make_reddit_tools
 from .tools.seo import make_seo_tools
 from .tools.strategy import make_strategy_tools
 from .tools.web import make_web_tools
+from .voc import make_voc_tools
 
 log = structlog.get_logger()
 
@@ -78,15 +79,21 @@ EXECUTE IN ORDER. Steps 7-9 (brain -> positioning -> the bet) are the whole poin
    vocabulary, and the communities they live in. Everything below conditions on
    it, so output is specific to THIS product. Do this before positioning.
 
-8. DIAGNOSE: `generate_positioning_doc` (no arguments) — situation, ICP, value
+8. MINE CUSTOMER VOICE: `mine_customer_voice` (no arguments). Searches real
+   forums/threads for how the ICP actually describes this problem and what they
+   dislike about the alternatives, then folds their exact words into the brain.
+   Do this right after the brain so positioning + the bet speak in the customer's
+   language. If it finds little, it keeps the base brain — just move on.
+
+9. DIAGNOSE: `generate_positioning_doc` (no arguments) — situation, ICP, value
    prop, the WEDGE, ranked channels, north-star metric. The message spine.
 
-9. COMMIT THE BET: `commit_channel_bet` (no arguments). Picks the ONE highest-fit
-   channel (not a ranked list), the play (asset / cadence / exact targets), the
-   leading indicator, and the kill criteria — then opens this week's 3 moves.
-   THIS is the core deliverable of the dive.
+10. COMMIT THE BET: `commit_channel_bet` (no arguments). Picks the ONE
+   highest-fit channel (not a ranked list), the play (asset / cadence / exact
+   targets), the leading indicator, and the kill criteria — then opens this
+   week's 3 moves. THIS is the core deliverable of the dive.
 
-10. MAKE THE FIRST ASSET — exactly one, on-wedge, serving the bet:
+11. MAKE THE FIRST ASSET — exactly one, on-wedge, serving the bet:
     - If the bet's play is content or SEO: call `news_search`/`web_search` for
       3-5 recent items (dates + sources), then `draft_article` (length=800)
       passing them as `current_context`.
@@ -101,8 +108,8 @@ RULES:
   * NEVER call the same tool more than once unless explicitly told to.
   * Anchor EVERY output on the brain's wedge + ICP vocabulary. If a suggestion
     would apply to any product, it's wrong — make it specific.
-  * Steps 7-9 (brain, positioning, the bet) MUST complete — they are the dive.
-    Step 10 is the only one to drop if you run low on iterations.
+  * Steps 7-10 (brain, voice, positioning, the bet) MUST complete — they are the
+    dive. Step 11 is the only one to drop if you run low on iterations.
 """
 
 
@@ -142,6 +149,11 @@ def build_registry_for_run(
     for t in make_reddit_tools(
         llm=llm, store=store, project_id=project_id, run_id=run_id,
         web_base_url=config.web.base_url, web_api_key=_web_key,
+    ):
+        registry.add(t)
+    for t in make_voc_tools(
+        llm=llm, store=store, project_id=project_id,
+        base_url=config.web.base_url, api_key=_web_key,
     ):
         registry.add(t)
     return registry
