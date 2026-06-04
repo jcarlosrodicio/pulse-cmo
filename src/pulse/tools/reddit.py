@@ -148,6 +148,68 @@ async def _search_reddit(query: str, subreddit: str | None = None, sort: str = "
     return []
 
 
+_REDDIT_URL_RE = re.compile(r"reddit\.com/r/([^/?#]+)/comments/([a-z0-9]+)", re.I)
+
+
+async def _search_reddit_websearch(
+    base_url: str, api_key: str, query: str, subreddit: str | None = None, n: int = 8
+) -> list[dict]:
+    """Find Reddit threads via the web-search API (`site:reddit.com …`).
+
+    Reddit network-blocks anonymous JSON from servers (403), so direct search is
+    dead. A general web search indexes Reddit well and works server-side. Returns
+    raw-post-shaped dicts (so _format_post works); score/comments/created_utc are
+    unknown from snippets, so they're left None and the LLM verify does the real
+    filtering.
+    """
+    if not (base_url and api_key):
+        return []
+    sub = (subreddit or "").lstrip("r/").lstrip("/") if subreddit else None
+    sq = f"site:reddit.com/r/{sub} {query}" if sub else f"site:reddit.com {query}"
+    try:
+        async with httpx.AsyncClient(timeout=25.0) as cx:
+            r = await cx.post(
+                f"{base_url.rstrip('/')}/v1/tools/search",
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                json={"query": sq, "num_results": n},
+            )
+        if r.status_code >= 400:
+            return []
+        data = r.json()
+    except Exception as e:
+        log.warning("reddit_websearch_failed", query=query, error=repr(e))
+        return []
+    # the search API returns either a bare list or a {results|data|items: [...]} dict
+    if isinstance(data, list):
+        items = data
+    else:
+        items = data.get("results") or data.get("data") or data.get("items") or []
+        if isinstance(items, dict):
+            items = items.get("items") or items.get("results") or []
+    out: list[dict] = []
+    for it in items or []:
+        url = it.get("url") or it.get("link") or ""
+        m = _REDDIT_URL_RE.search(url)
+        if not m:
+            continue
+        found_sub, pid = m.group(1), m.group(2)
+        title = (it.get("title") or "").strip()
+        title = re.sub(r"\s*[:\-|]\s*r/\w+.*$", "", title).strip() or title  # drop " : r/sub" suffix
+        snippet = (it.get("snippet") or it.get("description") or it.get("content") or "").strip()
+        out.append({
+            "id": pid,
+            "subreddit": found_sub,
+            "title": title,
+            "selftext": snippet[:1200],
+            "permalink": f"/r/{found_sub}/comments/{pid}/",
+            "score": None,
+            "num_comments": None,
+            "author": None,
+            "created_utc": None,  # unknown from a web snippet
+        })
+    return out
+
+
 def _format_post(post: dict) -> dict:
     return {
         "id": post.get("id"),
@@ -567,8 +629,14 @@ def make_reddit_tools(
     store: ActionStore,
     project_id: int,
     run_id: int,
+    web_base_url: str = "",
+    web_api_key: str = "",
 ) -> list[Tool]:
-    """Build Reddit tools bound to a run for persistence side-effects."""
+    """Build Reddit tools bound to a run for persistence side-effects.
+
+    Reddit search goes through the web-search API (`site:reddit.com`) because
+    Reddit blocks anonymous server access; web_base_url/web_api_key power that.
+    """
 
     @tool
     async def find_reddit_opportunities(
@@ -652,16 +720,24 @@ def make_reddit_tools(
             sample=ordered[:5],
         )
 
-        # ---------- STAGE 3: SEARCH ----------
-        # Fan-out budget: ~20 global + 24 sub-scoped = 44 reqs max.
+        # ---------- STAGE 3: SEARCH (via web search — Reddit blocks anon servers) ----------
+        # Fewer, higher-quality queries with BOUNDED concurrency — the search
+        # provider throttles a big concurrent fan-out down to empty results.
+        sem = asyncio.Semaphore(4)
+
+        async def _bounded(q: str, sub: str | None, n: int) -> list[dict]:
+            async with sem:
+                return await _search_reddit_websearch(web_base_url, web_api_key, q, sub, n)
+
         tasks: list = []
-        for q in ordered[:14]:
-            tasks.append(_search_reddit(q, None, "new", 8))
-        for q in ordered[:6]:
-            for sub in merged_subs[:4]:
-                tasks.append(_search_reddit(q, sub, "new", 5))
+        for q in ordered[:8]:
+            tasks.append(_bounded(q, None, 8))
+        for q in ordered[:3]:
+            for sub in merged_subs[:2]:
+                tasks.append(_bounded(q, sub, 6))
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
+        name_l = product_name.lower()
         seen: dict[str, dict] = {}
         for batch in results:
             if isinstance(batch, Exception):
@@ -670,9 +746,12 @@ def make_reddit_tools(
                 pid = post.get("id")
                 if not pid or pid in seen:
                     continue
-                if (post.get("created_utc") or 0) < cutoff:
+                cu = post.get("created_utc")
+                if cu and cu < cutoff:  # web snippets have no timestamp → keep them
                     continue
-                if not _is_searchable_post(post, product_name):
+                # skip threads already about our own product (we reply, not self-promote)
+                blob = f"{post.get('title','')} {post.get('selftext','')}".lower()
+                if name_l and name_l in blob:
                     continue
                 seen[pid] = _format_post(post)
 
@@ -704,21 +783,31 @@ def make_reddit_tools(
             verdicts = {}
 
         # ---------- STAGE 6: RANK + RETURN ----------
-        enriched: list[dict] = []
+        # Two-tier so a niche product is never left with nothing: score every
+        # verified candidate; surface the reply-worthy ones (>= SURFACE), and if
+        # none clear the bar, surface the single best as a labelled "watchlist"
+        # item (still human-reviewed, mention_product stays strict). Genuine
+        # garbage (< WATCH_MIN) is still dropped.
+        SURFACE, WATCH_MIN = 45, 25
+        scored: list[dict] = []
         for p in top_for_verify:
             v = verdicts.get(p["id"])
-            if not v or v["llm_score"] < 50:
-                continue  # filter out anything the LLM rejected
-            # combined score: regex weight 0.35, LLM weight 0.65.
-            # Normalize regex (which is unbounded but typically -10..120) to 0-100.
+            if not v:
+                continue
             regex_norm = max(0, min(100, p["regex_score"]))
             combined = 0.35 * regex_norm + 0.65 * v["llm_score"]
-            enriched.append({
+            scored.append({
                 **p,
                 "selftext": (p.get("selftext") or "")[:500],
                 **v,
                 "final_score": round(combined, 1),
             })
+        scored.sort(key=lambda p: (-p["llm_score"], -p["final_score"]))
+        enriched = [p for p in scored if p["llm_score"] >= SURFACE]
+        if not enriched and scored and scored[0]["llm_score"] >= WATCH_MIN:
+            best = dict(scored[0])
+            best["watchlist"] = True
+            enriched = [best]
         enriched.sort(key=lambda p: -p["final_score"])
         top = enriched[:10]
         log.info(

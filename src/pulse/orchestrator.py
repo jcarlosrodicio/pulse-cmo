@@ -199,7 +199,10 @@ def build_registry_for_run(
         registry.add(t)
     for t in make_document_tools(llm=llm, store=store, project_id=project_id):
         registry.add(t)
-    for t in make_reddit_tools(llm=llm, store=store, project_id=project_id, run_id=run_id):
+    for t in make_reddit_tools(
+        llm=llm, store=store, project_id=project_id, run_id=run_id,
+        web_base_url=config.web.base_url, web_api_key=_web_key,
+    ):
         registry.add(t)
     return registry
 
