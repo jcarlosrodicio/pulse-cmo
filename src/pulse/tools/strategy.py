@@ -13,8 +13,11 @@ from ..strategy_core import (
     GUARDRAIL_BLOCK,
     critique_revise,
     gather_evidence,
+    generate_channel_bet,
     generate_positioning,
+    generate_weekly_plan,
     render_evidence,
+    render_gtm_plan_doc,
 )
 from ..text import parse_json_lenient, strip_stray_cjk
 from .registry import Tool, tool
@@ -105,6 +108,34 @@ def make_strategy_tools(llm: LLM, store: ActionStore, project_id: int) -> list[T
             return json.dumps({"ok": False, "error": "could not produce positioning"})
         wedge = (pos.get("wedge") or {}).get("move", "")
         return json.dumps({"ok": True, "wedge": wedge, "value_prop": pos.get("value_prop", "")})
+
+    @tool
+    async def commit_channel_bet() -> str:
+        """Commit the ONE channel bet and open week 1 of the GTM loop.
+
+        Call this on the first dive AFTER build_product_brain and
+        generate_positioning_doc. It picks the single highest-fit channel (not a
+        ranked list), defines the play (the repeatable asset, cadence, exact
+        targets), the leading indicator, and the kill criteria — then generates
+        this week's 3 concrete moves. Concentration beats spray at 0->1. Reads the
+        persisted evidence itself; no arguments. Saves the 'gtm_plan' document.
+        """
+        bet = await generate_channel_bet(llm, store, project_id)
+        if not bet:
+            return json.dumps({"ok": False, "error": "could not commit a channel bet"})
+        week = await generate_weekly_plan(llm, store, project_id)
+        render_gtm_plan_doc(store, project_id)
+        moves = [
+            (m.get("move") or "")[:90]
+            for m in ((week or {}).get("plan") or {}).get("moves", [])
+        ]
+        return json.dumps({
+            "ok": True,
+            "channel": bet.get("channel", ""),
+            "play_asset": (bet.get("play") or {}).get("asset", ""),
+            "leading_indicator": bet.get("leading_indicator", ""),
+            "week_moves": moves,
+        })
 
     @tool
     async def generate_marketing_strategy(timeframe_days: int = 30) -> str:
@@ -276,6 +307,7 @@ def make_strategy_tools(llm: LLM, store: ActionStore, project_id: int) -> list[T
         extract_brand_voice,
         build_product_brain,
         generate_positioning_doc,
+        commit_channel_bet,
         generate_marketing_strategy,
         update_project_info,
         identify_market_gaps,

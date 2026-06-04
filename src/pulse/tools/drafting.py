@@ -172,8 +172,25 @@ async def _draft_variants_with_llm(
     return cleaned[:n]
 
 
+GROUND_RULE = (
+    "GROUND IT: lead with the product's WEDGE, write in the ICP's exact "
+    "vocabulary, and reference real features / competitors from the brain above. "
+    "Never write a line that could be about any other product — make it specific "
+    "to THIS one."
+)
+
+
 def make_drafting_tools(llm: LLM, store: ActionStore, project_id: int, run_id: int) -> list[Tool]:
     """Bind drafting tools to a specific (project, run) so each draft auto-saves."""
+
+    def _ground() -> str:
+        """The Product Brain + a grounding rule, appended to every draft prompt so
+        content is specific to this product (the wedge + the ICP's own words),
+        not generic. Empty until the Brain exists."""
+        from ..product_brain import brain_context_block
+
+        bb = brain_context_block(store.get_product_brain(project_id))
+        return ("\n\n" + bb + "\n\n" + GROUND_RULE) if bb else ""
 
     async def _save_action(action_type: str, title: str, content: str, context: dict[str, Any]) -> int:
         return store.create_action(
@@ -221,6 +238,7 @@ def make_drafting_tools(llm: LLM, store: ActionStore, project_id: int, run_id: i
             + HUMAN_TONE_RULES
             + "\n\n" + STRICT_OUTPUT_RULES
             + ("\n\n" + bv_block if bv_block else "")
+            + _ground()
         )
         user = f"topic: {topic}\nangle: {angle or '(your call. pick the most specific/surprising read.)'}"
         variants = await _draft_variants_with_llm(
@@ -274,6 +292,7 @@ def make_drafting_tools(llm: LLM, store: ActionStore, project_id: int, run_id: i
             + HUMAN_TONE_RULES
             + "\n\n" + STRICT_OUTPUT_RULES
             + ("\n\n" + _brand_voice_block(bv) if bv else "")
+            + _ground()
         )
         user = f"topic: {topic}\nangle: {angle}"
         variants = await _draft_variants_with_llm(
@@ -327,6 +346,7 @@ def make_drafting_tools(llm: LLM, store: ActionStore, project_id: int, run_id: i
             + HUMAN_TONE_RULES
             + "\n\n" + STRICT_OUTPUT_RULES
             + ("\n\n" + _brand_voice_block(bv) if bv else "")
+            + _ground()
         )
         user = f"topic: {topic}\nangle: {angle or '(your call. pick the angle that lets you be most specific.)'}"
         variants = await _draft_variants_with_llm(
@@ -419,6 +439,7 @@ def make_drafting_tools(llm: LLM, store: ActionStore, project_id: int, run_id: i
             HUMAN_TONE_RULES
             + "\n\n" + STRICT_OUTPUT_RULES
             + ("\n\n" + _brand_voice_block(bv) if bv else "")
+            + _ground()
         )
         user = (
             f"topic: {topic}\n"
@@ -428,6 +449,12 @@ def make_drafting_tools(llm: LLM, store: ActionStore, project_id: int, run_id: i
         )
         body = await _draft_with_llm(
             llm, system=system, user=user, temperature=0.82, max_tokens=4000
+        )
+        # long-form is the most generic-prone — run the grounded critic over it
+        from ..strategy_core import critique_revise
+
+        body = await critique_revise(
+            llm, kind="blog article", draft=body, brain=store.get_product_brain(project_id)
         )
         action_id = await _save_action(
             "article",

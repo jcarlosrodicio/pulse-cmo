@@ -31,11 +31,13 @@ import { Skeleton, SkeletonText } from "../ui/Skeleton";
 
 type Tab = "health" | "traction" | "links" | "technical" | "geo" | "checks";
 
+// AI/GEO + Links audits were cut from the product: buzzword theater for a
+// pre-traction product. The tabs are gone; Traction + Health (the signals that
+// actually matter at 0->1) stay. The audit code remains dead behind the API for
+// now, surfaced nowhere.
 const TABS: { id: Tab; label: string; icon: typeof Activity }[] = [
   { id: "traction", label: "Traction", icon: Radar },
   { id: "health", label: "Health", icon: Activity },
-  { id: "links", label: "Links", icon: Link2 },
-  { id: "geo", label: "AI / GEO", icon: Brain },
   { id: "technical", label: "Technical", icon: Wrench },
   { id: "checks", label: "Checks", icon: CheckCircle2 },
 ];

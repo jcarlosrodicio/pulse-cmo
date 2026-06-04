@@ -129,6 +129,17 @@ CREATE TABLE IF NOT EXISTS launch_campaigns (
     UNIQUE (project_id)
 );
 
+CREATE TABLE IF NOT EXISTS gtm_weeks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER NOT NULL,
+    week_num INTEGER NOT NULL,        -- 1, 2, 3, … the loop's heartbeat
+    started_at TEXT NOT NULL,
+    plan TEXT,                        -- json: {focus, moves:[{move, leading_indicator, why, done}]}
+    snapshot TEXT,                    -- json: {signups, top_sources, shipped, notes} (null until the founder logs the week)
+    review TEXT,                      -- json: {what_moved, attribution, the_call, call_kind, next_focus} (null until reviewed)
+    FOREIGN KEY (project_id) REFERENCES projects(id)
+);
+
 CREATE INDEX IF NOT EXISTS idx_actions_project_status ON actions(project_id, status);
 CREATE INDEX IF NOT EXISTS idx_actions_project_type ON actions(project_id, action_type);
 CREATE INDEX IF NOT EXISTS idx_runs_project ON agent_runs(project_id);
@@ -162,6 +173,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
         ("projects", "crawl_summary", "TEXT"),    # json: distilled crawl evidence (own site)
         ("projects", "competitor_reads", "TEXT"), # json: per-competitor crawl reads
         ("projects", "product_brain", "TEXT"),    # json: the shared product intelligence (wedge/ICP/JTBD/queries)
+        ("projects", "channel_bet", "TEXT"),      # json: the committed GTM channel bet (channel/why/play/leading_indicator)
         ("actions", "detail_md", "TEXT"),
         ("agent_runs", "prompt_tokens", "INTEGER DEFAULT 0"),
         ("agent_runs", "completion_tokens", "INTEGER DEFAULT 0"),
@@ -222,7 +234,7 @@ class ActionStore:
             "schedule_minute",
             "timezone",
         }
-        json_fields = {"competitors", "writing_instructions", "pagespeed_summary", "seo_summary", "brand_voice", "schedule_times", "brief", "crawl_summary", "competitor_reads", "product_brain"}
+        json_fields = {"competitors", "writing_instructions", "pagespeed_summary", "seo_summary", "brand_voice", "schedule_times", "brief", "crawl_summary", "competitor_reads", "product_brain", "channel_bet"}
         sets, vals = [], []
         for k, v in fields.items():
             if k in scalar:
@@ -354,6 +366,94 @@ class ActionStore:
         if not row or not row["product_brain"]:
             return None
         return json.loads(row["product_brain"])
+
+    def set_channel_bet(self, project_id: int, bet: dict[str, Any]) -> None:
+        """The committed GTM channel bet — the ONE channel this product goes deep
+        on (channel / why / the play / leading indicator / kill criteria). One
+        current bet per project; replaced when the loop says kill-and-switch."""
+        with self._lock, self._conn() as conn:
+            conn.execute(
+                "UPDATE projects SET channel_bet=? WHERE id=?",
+                (json.dumps(bet), project_id),
+            )
+
+    def get_channel_bet(self, project_id: int) -> dict[str, Any] | None:
+        with self._conn() as conn:
+            row = conn.execute("SELECT channel_bet FROM projects WHERE id=?", (project_id,)).fetchone()
+        if not row or not row["channel_bet"]:
+            return None
+        return json.loads(row["channel_bet"])
+
+    # --- gtm weeks (the loop) ----------------------------------------------
+
+    def create_gtm_week(self, project_id: int, *, plan: dict[str, Any]) -> dict[str, Any]:
+        """Open a new week with its plan (the 3 moves). week_num auto-increments."""
+        with self._lock, self._conn() as conn:
+            row = conn.execute(
+                "SELECT COALESCE(MAX(week_num), 0) AS m FROM gtm_weeks WHERE project_id=?",
+                (project_id,),
+            ).fetchone()
+            week_num = int(row["m"]) + 1
+            cur = conn.execute(
+                "INSERT INTO gtm_weeks (project_id, week_num, started_at, plan) "
+                "VALUES (?, ?, ?, ?)",
+                (project_id, week_num, _now(), json.dumps(plan)),
+            )
+            wid = int(cur.lastrowid)
+        return self.get_gtm_week(wid)  # type: ignore[return-value]
+
+    def get_gtm_week(self, week_id: int) -> dict[str, Any] | None:
+        with self._conn() as conn:
+            row = conn.execute("SELECT * FROM gtm_weeks WHERE id=?", (week_id,)).fetchone()
+        return _hydrate_gtm_week(row)
+
+    def current_gtm_week(self, project_id: int) -> dict[str, Any] | None:
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT * FROM gtm_weeks WHERE project_id=? ORDER BY week_num DESC LIMIT 1",
+                (project_id,),
+            ).fetchone()
+        return _hydrate_gtm_week(row)
+
+    def list_gtm_weeks(self, project_id: int, limit: int = 26) -> list[dict[str, Any]]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM gtm_weeks WHERE project_id=? ORDER BY week_num DESC LIMIT ?",
+                (project_id, limit),
+            ).fetchall()
+        return [w for w in (_hydrate_gtm_week(r) for r in rows) if w is not None]
+
+    def set_gtm_week_snapshot(self, week_id: int, snapshot: dict[str, Any]) -> None:
+        with self._lock, self._conn() as conn:
+            conn.execute(
+                "UPDATE gtm_weeks SET snapshot=? WHERE id=?",
+                (json.dumps(snapshot), week_id),
+            )
+
+    def set_gtm_week_review(self, week_id: int, review: dict[str, Any]) -> None:
+        with self._lock, self._conn() as conn:
+            conn.execute(
+                "UPDATE gtm_weeks SET review=? WHERE id=?",
+                (json.dumps(review), week_id),
+            )
+
+    def set_gtm_week_plan(self, week_id: int, plan: dict[str, Any]) -> None:
+        with self._lock, self._conn() as conn:
+            conn.execute(
+                "UPDATE gtm_weeks SET plan=? WHERE id=?",
+                (json.dumps(plan), week_id),
+            )
+
+    def set_gtm_move_done(self, week_id: int, index: int, done: bool) -> dict[str, Any] | None:
+        """Toggle one of this week's moves done/undone. Returns the updated week."""
+        week = self.get_gtm_week(week_id)
+        if not week or not week.get("plan"):
+            return week
+        moves = week["plan"].get("moves") or []
+        if 0 <= index < len(moves):
+            moves[index]["done"] = bool(done)
+            self.set_gtm_week_plan(week_id, week["plan"])
+        return self.get_gtm_week(week_id)
 
     # --- usage ledger -------------------------------------------------------
 
@@ -827,6 +927,7 @@ class ActionStore:
                 "project_versions",
                 "usage_events",
                 "launch_campaigns",
+                "gtm_weeks",
                 "agent_runs",
             ):
                 conn.execute(f"DELETE FROM {table} WHERE project_id=?", (project_id,))
@@ -853,6 +954,7 @@ def _hydrate_project(row: sqlite3.Row | None) -> dict[str, Any] | None:
     d["crawl_summary"] = json.loads(d["crawl_summary"]) if d.get("crawl_summary") else None
     d["competitor_reads"] = json.loads(d["competitor_reads"]) if d.get("competitor_reads") else []
     d["product_brain"] = json.loads(d["product_brain"]) if d.get("product_brain") else None
+    d["channel_bet"] = json.loads(d["channel_bet"]) if d.get("channel_bet") else None
     d["schedule_times"] = json.loads(d["schedule_times"]) if d.get("schedule_times") else None
     # back-compat: derive schedule_times from hour/minute if not set
     if not d["schedule_times"]:
@@ -900,4 +1002,14 @@ def _hydrate_launch(row: sqlite3.Row | None) -> dict[str, Any] | None:
     d["classification"] = json.loads(d["classification"]) if d.get("classification") else None
     d["intake"] = json.loads(d["intake"]) if d.get("intake") else {}
     d["plan"] = json.loads(d["plan"]) if d.get("plan") else None
+    return d
+
+
+def _hydrate_gtm_week(row: sqlite3.Row | None) -> dict[str, Any] | None:
+    if not row:
+        return None
+    d = dict(row)
+    d["plan"] = json.loads(d["plan"]) if d.get("plan") else None
+    d["snapshot"] = json.loads(d["snapshot"]) if d.get("snapshot") else None
+    d["review"] = json.loads(d["review"]) if d.get("review") else None
     return d

@@ -174,6 +174,19 @@ def brain_context_block(brain: dict[str, Any] | None) -> str:
         rows.append(f"  real features: {_join(ents.get('feature_names'))}")
     if brain.get("icp_vocabulary"):
         rows.append(f"  ICP vocabulary (write in these words): {_join(brain.get('icp_vocabulary'), 10)}")
+    voice = brain.get("voice") or {}
+    if voice.get("pains"):
+        rows.append(f"  VOICE — real pains (verbatim from forums): {_join(voice.get('pains'), 5)}")
+    if voice.get("alternative_gripes"):
+        gripes = "; ".join(
+            f"{g.get('alternative', '')}: {g.get('gripe', '')}"
+            for g in voice["alternative_gripes"][:4]
+            if isinstance(g, dict) and g.get("gripe")
+        )
+        if gripes:
+            rows.append(f"  VOICE — what they dislike about alternatives: {gripes}")
+    if voice.get("vocabulary"):
+        rows.append(f"  VOICE — their words: {_join(voice.get('vocabulary'), 10)}")
     if brain.get("disqualifiers"):
         rows.append(f"  NOT for / disqualifiers: {_join(brain.get('disqualifiers'))}")
     return strip_stray_cjk("\n".join(rows))
