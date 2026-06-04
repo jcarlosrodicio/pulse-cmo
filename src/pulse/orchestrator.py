@@ -1,14 +1,20 @@
 """Run orchestrator — composes tools + system prompt for each run kind.
 
-Three kinds of run:
-  * first_dive — initial scan of a new project. Heavy on crawl + audit + voice.
-  * daily      — recurring run. Generates a small set of ready-to-ship actions.
-  * manual     — user-initiated ad-hoc run with a custom instruction.
+Run kinds:
+  * first_dive    — initial dive: diagnose the product, sharpen the message,
+                    commit ONE channel bet, open week 1. (agent loop)
+  * weekly        — scheduled lean refresh: roll the GTM week forward when stale.
+                    No firehose, no snapshot needed. (deterministic)
+  * weekly_review — founder-triggered: read the week's real numbers, make the
+                    call, replan next week. (deterministic)
+  * manual        — user-initiated ad-hoc run with a custom instruction.
+  * targeted      — generate ONE asset of a specific kind for the "+" buttons.
 """
 
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from typing import Any, AsyncIterator
 
 import structlog
@@ -17,6 +23,11 @@ from .agent import Agent
 from .config import Config
 from .llm import LLM
 from .store import ActionStore
+from .strategy_core import (
+    generate_weekly_plan,
+    render_gtm_plan_doc,
+    run_weekly_review as _run_weekly_review_core,
+)
 from .tools import ToolRegistry
 from .tools.crawl import make_crawl_tools
 from .tools.discovery import make_discovery_tools
@@ -24,7 +35,6 @@ from .tools.documents import make_document_tools
 from .tools.drafting import make_drafting_tools
 from .tools.reddit import make_reddit_tools
 from .tools.seo import make_seo_tools
-from .tools.geo import make_geo_tools
 from .tools.strategy import make_strategy_tools
 from .tools.web import make_web_tools
 
@@ -32,135 +42,67 @@ log = structlog.get_logger()
 
 
 FIRST_DIVE_PROMPT = """\
-You are Pulse — an AI marketing operator for indie founders. Today is the first
-dive on a new project. The user has just signed up and given you their site URL.
+You are Pulse — an AI GTM operator for indie founders. This is the first dive on
+a new project: the founder just gave you their site URL.
 
-GOAL: Diagnose the product properly, then produce a tight set of marketing
-actions grounded in that diagnosis. A considered strategy beats a pile of
-generic posts. If a MARKETING BRIEF is in the context below, every output must
-serve the founder's stated goal, ICP, and constraints.
+Your job is NOT to spray content. It is to start ONE disciplined GTM loop:
+understand the product, sharpen the message, commit to a SINGLE channel bet, and
+lay out this week's first moves. A sharp bet beats a pile of generic posts. If a
+MARKETING BRIEF is in the context below, every output serves the founder's stated
+goal, ICP, and constraints.
 
-EXECUTE IN ORDER. The diagnosis (steps 6-8) is the priority — it makes
-everything else specific instead of generic.
+EXECUTE IN ORDER. Steps 7-9 (brain -> positioning -> the bet) are the whole point.
 
 1. CRAWL with `crawl_website` (max_pages=10). Extract product, audience, pricing,
-   tone. If the URL is a GitHub repo, crawl_website returns clean repo metadata
-   (stars, language, license, topics) + the README — use that as the product
-   picture, and if the repo has a `homepage`, treat THAT as the site for the
-   SEO/GEO/links audits.
+   tone. If the URL is a GitHub repo, use the returned repo metadata (stars,
+   language, topics) + README as the product picture, and if it has a `homepage`,
+   treat THAT as the site.
 
-2. CALL `update_project_info` with name, description, and competitors spotted
-   on the site (even if sparse).
+2. CALL `update_project_info` with name, description, and any competitors spotted.
 
 3. EXTRACT brand voice with `extract_brand_voice` using homepage hero + about +
    any blog excerpts as writing_samples.
 
 4. CALL `generate_product_information` to save the Product Information document.
 
-5. AUDIT SEO with `audit_seo` on the homepage (for a GitHub project, use the
-   repo's `homepage` URL if it has one; skip if a repo with no homepage). For
-   high + medium findings, call `log_seo_fix`. Skip low unless fewer than 3
-   total. Then call `audit_geo` and `audit_links` on the same URL — one call
-   each. Log any HIGH GEO finding with `log_seo_fix`.
+5. SEO HYGIENE — ONE `audit_seo` on the homepage (for a repo, its `homepage` URL;
+   skip if it has none). Log only HIGH findings with `log_seo_fix`. This is a
+   one-time hygiene pass, not a channel — do not re-audit and do not chase low/
+   medium nits.
 
-6. RESEARCH COMPETITORS (do this BEFORE the brain so it's grounded): for the top
-   1-2 competitors, `analyze_competitor` on each competitor URL (use
-   `web_search` if you don't know the URL). Their reads are saved automatically.
-   Cap at 2.
+6. RESEARCH COMPETITORS: for the top 1-2, `analyze_competitor` on each URL (use
+   `web_search` if you don't know it). Reads are saved automatically. Cap at 2.
 
-7. BUILD THE PRODUCT BRAIN: call `build_product_brain` (no arguments). It
-   distills everything so far — crawl, brief, competitor reads — into the SHARED
-   intelligence: the WEDGE, the ICP and their exact vocabulary, the communities
-   they live in, and intent-grouped search queries. Every step below conditions
-   on it, so output is specific to THIS product, not generic. Do this before
-   positioning.
+7. BUILD THE PRODUCT BRAIN: `build_product_brain` (no arguments). Distills the
+   crawl + brief + competitor reads into the WEDGE, the ICP and their exact
+   vocabulary, and the communities they live in. Everything below conditions on
+   it, so output is specific to THIS product. Do this before positioning.
 
-8. DIAGNOSE: call `generate_positioning_doc` (no arguments) — situation read,
-   ICP, value prop, the WEDGE, ranked channels, north-star metric. The spine.
+8. DIAGNOSE: `generate_positioning_doc` (no arguments) — situation, ICP, value
+   prop, the WEDGE, ranked channels, north-star metric. The message spine.
 
-9. GENERATE the plan: `generate_marketing_strategy(timeframe_days=30)`. Builds
-   on the positioning + brain — a sequenced plan with a leading indicator on
-   every item, not a generic checklist.
+9. COMMIT THE BET: `commit_channel_bet` (no arguments). Picks the ONE highest-fit
+   channel (not a ranked list), the play (asset / cadence / exact targets), the
+   leading indicator, and the kill criteria — then opens this week's 3 moves.
+   THIS is the core deliverable of the dive.
 
-10. DRAFT STARTER CONTENT, on-wedge (do not skip):
-    - `draft_tweet`: introduce the product, aligned to the wedge. one tweet.
-    - BEFORE the article: call `news_search`/`web_search` for the category to
-      find 3-5 recent items (dates + sources), then `draft_article` (length=800)
+10. MAKE THE FIRST ASSET — exactly one, on-wedge, serving the bet:
+    - If the bet's play is content or SEO: call `news_search`/`web_search` for
+      3-5 recent items (dates + sources), then `draft_article` (length=800)
       passing them as `current_context`.
+    - Otherwise: `draft_tweet` introducing the product on the wedge. one tweet.
+    Pick the ONE that fits the bet's play. Do not draft several.
 
-11. FIND HN opportunities — ONE call to `find_hn_opportunities` with 3-5
-    keywords drawn from the brain (use its category terms + competitor names,
-    not just the product name). `log_hn_opportunity` on the 1-2 most relevant.
-
-12. FIND REDDIT opportunities — ONE call to `find_reddit_opportunities` with NO
-    arguments. Items include `suggested_angle`, `mention_product`, `llm_reason`,
-    `final_score`. Pick the TOP 1-2. For each, `draft_reddit_reply` with:
-      - post_url, post_title, post_body (paste in full), subreddit
-      - product_angle  = item's `suggested_angle`
-      - why_relevant   = item's `llm_reason`
-      - mention_product = item's `mention_product`
-    Do NOT call `log_reddit_opportunity`. Never search Reddit twice.
-
-13. SAVE the Competitor Analysis document with `generate_competitor_analysis`,
-    then `identify_market_gaps` (both read the competitor reads from step 6).
-
-STOP when done. Output a 3-5 line summary of what you generated.
+STOP when done. Output a 3-5 line summary: the wedge, the channel bet, and this
+week's 3 moves.
 
 RULES:
   * Use tools — don't speculate. Each call should be motivated by a result.
   * NEVER call the same tool more than once unless explicitly told to.
-  * Anchor EVERY output on the product brain's wedge + ICP vocabulary. If a
-    suggestion would apply to any product, it's wrong — make it specific.
-  * Reddit replies need 5+ sentences of real value before any product mention.
-  * Steps 7-12 (brain, positioning, strategy, a content draft, HN, AND Reddit)
-    are the core deliverables — make sure they ALL complete. Step 13 (competitor
-    doc + gaps) is the only one to drop if you run low on iterations.
-"""
-
-
-DAILY_PROMPT = """\
-You are Pulse — an AI marketing operator for indie founders. This is the
-user's recurring daily run. You already know the product (see project info
-in the system context). Your job: produce 3-5 actions the user can ship
-today in under 15 minutes total.
-
-EXECUTE:
-
-1. SEARCH HN with `find_hn_opportunities` for the product's keywords.
-   For each genuinely relevant thread, log it with `log_hn_opportunity`.
-   Cap at 2.
-
-2. SEARCH Reddit with `find_reddit_opportunities` (call with NO arguments).
-   For the top 1-2 items, call `draft_reddit_reply` passing:
-     - post_url, post_title, post_body, subreddit (from the item)
-     - product_angle  = item's `suggested_angle`
-     - why_relevant   = item's `llm_reason`
-     - mention_product = item's `mention_product` (true/false)
-   The tool always produces 3 reply variants — handle both
-   "mention product" and "no mention" cases. Do not use
-   `log_reddit_opportunity`. Cap at 2 Reddit actions.
-
-3. CHOOSE one quick content piece. ALWAYS check `news_search` first for a
-   timely angle in the product's category (today + last 48h). Then draft:
-   - `draft_tweet` on the news hook, OR
-   - `draft_linkedin_post`, OR
-   - `draft_article` (if there's a clear, fresh story worth a 600-900 word
-     piece, pass the news findings as `current_context`), OR
-   - `draft_hn_post` (rare — only if there's a launch-worthy update).
-   Pick what fits today best. Don't draft all of them.
-
-4. RE-AUDIT SEO on the homepage with `audit_seo` — if there are new high
-   or medium findings (compared to past runs), log them with `log_seo_fix`.
-   Skip if no new issues.
-
-STOP after 3-5 total actions. Output a single 2-3 line summary listing
-what you generated and which to action first.
-
-RULES:
-  * Use tools, don't speculate.
-  * Different angles than the last few daily runs — variety > repetition.
-  * Cap total actions at 5. Quality > quantity.
-  * Reddit replies must answer the actual question; copy-paste only.
+  * Anchor EVERY output on the brain's wedge + ICP vocabulary. If a suggestion
+    would apply to any product, it's wrong — make it specific.
+  * Steps 7-9 (brain, positioning, the bet) MUST complete — they are the dive.
+    Step 10 is the only one to drop if you run low on iterations.
 """
 
 
@@ -188,8 +130,6 @@ def build_registry_for_run(
     ):
         registry.add(t)
     for t in make_seo_tools(store=store, project_id=project_id):
-        registry.add(t)
-    for t in make_geo_tools(store=store, project_id=project_id):
         registry.add(t)
     for t in make_discovery_tools(store, project_id, llm):
         registry.add(t)
@@ -253,7 +193,20 @@ async def run_first_dive(
         yield ev
 
 
-async def run_daily(
+def _week_is_stale(week: dict[str, Any] | None, *, days: int = 7) -> bool:
+    """True if the current week's plan is old enough to roll forward."""
+    if not week:
+        return True
+    try:
+        started = datetime.fromisoformat(str(week.get("started_at")))
+        if started.tzinfo is None:
+            started = started.replace(tzinfo=timezone.utc)
+        return (datetime.now(timezone.utc) - started).days >= days
+    except (ValueError, TypeError):
+        return True
+
+
+async def run_weekly(
     *,
     config: Config,
     llm: LLM,
@@ -261,22 +214,88 @@ async def run_daily(
     project_id: int,
     run_id: int,
 ) -> AsyncIterator[dict[str, Any]]:
+    """Scheduled lean refresh: roll this week's 3 moves forward when the current
+    plan is stale (>= 7 days). No firehose, no channels spammed, no snapshot
+    needed — just keep the plan current. Deterministic; safe to fire daily (it
+    no-ops until a week has passed)."""
     project = store.get_project(project_id)
     if not project:
         raise ValueError(f"project {project_id} not found")
-    registry = build_registry_for_run(config, llm, store, project_id, run_id)
-    agent = Agent(
-        llm=llm,
-        registry=registry,
-        system_prompt=DAILY_PROMPT + "\n\n" + _project_context(project),
-        max_iterations=config.agent.max_iterations,
-    )
-    user_msg = {
-        "role": "user",
-        "content": f"Run today's daily pass for {project['url']}.",
-    }
-    async for ev in agent.stream([user_msg]):
-        yield ev
+
+    yield {"type": "start"}
+    yield {"type": "iteration", "n": 1}
+
+    if not store.get_channel_bet(project_id):
+        msg = "No channel bet committed yet — run the first dive first."
+        yield {"type": "text", "text": msg}
+        yield {"type": "done", "iterations": 1, "content": msg}
+        return
+
+    week = store.current_gtm_week(project_id)
+    if week and not _week_is_stale(week):
+        msg = f"This week's plan is still fresh (week {week.get('week_num')}). Nothing to refresh."
+        yield {"type": "text", "text": msg}
+        yield {"type": "done", "iterations": 1, "content": msg}
+        return
+
+    yield {"type": "text", "text": "Rolling the GTM week forward — refreshing this week's 3 moves.\n"}
+    prior_review = (week or {}).get("review")
+    new_week = await generate_weekly_plan(llm, store, project_id, prior_review=prior_review)
+    render_gtm_plan_doc(store, project_id)
+    if not new_week:
+        msg = "Could not refresh the plan this time."
+        yield {"type": "text", "text": msg}
+        yield {"type": "done", "iterations": 1, "content": msg}
+        return
+    moves = [m.get("move", "") for m in (new_week.get("plan") or {}).get("moves", [])]
+    summary = f"Week {new_week.get('week_num')} plan:\n" + "\n".join(f"- {m}" for m in moves)
+    yield {"type": "text", "text": summary}
+    yield {"type": "done", "iterations": 1, "content": summary}
+
+
+async def run_weekly_review(
+    *,
+    config: Config,
+    llm: LLM,
+    store: ActionStore,
+    project_id: int,
+    run_id: int,
+    instruction: str = "",
+) -> AsyncIterator[dict[str, Any]]:
+    """Founder-triggered: read the week's real numbers (the snapshot arrives as
+    JSON in `instruction`) against the plan, make the call (continue / adjust /
+    kill), re-bet on a kill, and open next week's plan. Deterministic — no agent
+    fan-out, no generic output."""
+    project = store.get_project(project_id)
+    if not project:
+        raise ValueError(f"project {project_id} not found")
+
+    try:
+        snapshot = json.loads(instruction) if instruction.strip() else {}
+    except json.JSONDecodeError:
+        snapshot = {"notes": instruction}
+    if not isinstance(snapshot, dict):
+        snapshot = {"notes": str(snapshot)}
+
+    yield {"type": "start"}
+    yield {"type": "iteration", "n": 1}
+    yield {"type": "text", "text": "Reading your week against the plan and making the call.\n"}
+
+    result = await _run_weekly_review_core(llm, store, project_id, snapshot)
+    review = result.get("review") or {}
+    next_week = result.get("week") or {}
+
+    lines: list[str] = []
+    if review.get("the_call"):
+        lines.append(f"The call ({review.get('call_kind', '')}): {review.get('the_call')}")
+        lines.append("")
+    moves = [m.get("move", "") for m in (next_week.get("plan") or {}).get("moves", [])]
+    if moves:
+        lines.append(f"Next week (week {next_week.get('week_num')}):")
+        lines += [f"- {m}" for m in moves]
+    summary = "\n".join(lines) or "Weekly review complete."
+    yield {"type": "text", "text": summary}
+    yield {"type": "done", "iterations": 1, "content": summary}
 
 
 async def run_manual(

@@ -24,6 +24,8 @@ import { CompanySidebar } from "@/components/company/CompanySidebar";
 import { AnalyticsPanel } from "@/components/analytics/AnalyticsPanel";
 import { ActionsFeed } from "@/components/actions/ActionsFeed";
 import { ActionDetailSheet } from "@/components/actions/ActionDetailSheet";
+import { GtmLoopPanel } from "@/components/gtm/GtmLoopPanel";
+import { WeeklyReviewModal } from "@/components/gtm/WeeklyReviewModal";
 import { ChatPanel } from "@/components/chat/ChatPanel";
 import { WritingInstructionsModal } from "@/components/settings/WritingInstructions";
 import { SettingsSheet } from "@/components/settings/SettingsSheet";
@@ -230,6 +232,10 @@ function Dashboard({
   const [showDanger, setShowDanger] = useState(false);
   const [generatingTarget, setGeneratingTarget] = useState<TargetKind | null>(null);
   const [mobilePane, setMobilePane] = useState<"company" | "analytics" | "actions" | "chat">("actions");
+  // the GTM loop panel refetches whenever this bumps (after a dive or a review)
+  const [gtmReloadKey, setGtmReloadKey] = useState(0);
+  const [showWeeklyReview, setShowWeeklyReview] = useState(false);
+  const [reviewWeekNum, setReviewWeekNum] = useState<number | null>(null);
   const toast = useToast();
   const knownActionIdsRef = useRef<Set<number>>(new Set());
 
@@ -275,6 +281,7 @@ function Dashboard({
   useEffect(() => {
     onRunFinished((_runId, status) => {
       if (status === "done") {
+        setGtmReloadKey((k) => k + 1); // refresh the bet / this week / the call
         toast.push({
           kind: "success",
           title: "Run complete",
@@ -500,19 +507,30 @@ function Dashboard({
         }
         analytics={<AnalyticsPanel project={project} isInitialDive={isInitialDive} />}
         actions={
-          <ActionsFeed
-            actions={actions}
-            onSelect={setSelectedAction}
-            onRefresh={refreshActions}
-            onOpenInstructions={() => setShowWritingModal(true)}
-            onStatusChange={setActionStatus}
-            onGenerate={handleGenerate}
-            generatingTarget={generatingTarget}
-            isInitialDive={isInitialDive}
-            lastRunAt={lastDoneRun?.finished_at ?? null}
-            nextRunAt={nextRunIso(project, runs)}
-            runStatus={runStatus}
-          />
+          <>
+            <GtmLoopPanel
+              projectId={project.id}
+              isInitialDive={isInitialDive}
+              reloadKey={gtmReloadKey}
+              onLogWeek={(wn) => {
+                setReviewWeekNum(wn);
+                setShowWeeklyReview(true);
+              }}
+            />
+            <ActionsFeed
+              actions={actions}
+              onSelect={setSelectedAction}
+              onRefresh={refreshActions}
+              onOpenInstructions={() => setShowWritingModal(true)}
+              onStatusChange={setActionStatus}
+              onGenerate={handleGenerate}
+              generatingTarget={generatingTarget}
+              isInitialDive={isInitialDive}
+              lastRunAt={lastDoneRun?.finished_at ?? null}
+              nextRunAt={nextRunIso(project, runs)}
+              runStatus={runStatus}
+            />
+          </>
         }
         chat={<ChatPanel projectId={project.id} />}
         mobilePane={mobilePane}
@@ -582,6 +600,16 @@ function Dashboard({
         onDeleted={async () => {
           toast.push({ kind: "info", title: "Project deleted", detail: `${project.name} was wiped.` });
           await onProjectDeleted(project.id);
+        }}
+      />
+
+      <WeeklyReviewModal
+        open={showWeeklyReview}
+        weekNum={reviewWeekNum}
+        onClose={() => setShowWeeklyReview(false)}
+        onSubmit={async (snapshot) => {
+          // streams the call live in the console, like a dive
+          await start("weekly_review", { instruction: JSON.stringify(snapshot) });
         }}
       />
 

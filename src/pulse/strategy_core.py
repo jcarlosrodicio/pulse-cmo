@@ -15,6 +15,7 @@ evidence is surfaced as open questions, rather than presented as fact.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
 
 import structlog
@@ -289,7 +290,8 @@ async def generate_positioning(
     raw = await llm.complete(
         [Message(role="system", content=_POSITIONING_SYSTEM), Message(role="user", content=user)],
         temperature=0.45,
-        max_tokens=1800,
+        max_tokens=2600,
+        json_mode=True,
     )
     pos = parse_json(raw)
     if not isinstance(pos, dict) or not pos.get("value_prop"):
@@ -359,3 +361,377 @@ async def critique_revise(
     revised = strip_stray_cjk(strip_draft_preamble(revised or "")).strip()
     # guard against a critic that returns something degenerate/empty
     return revised if len(revised) >= max(40, len(cleaned) // 3) else cleaned
+
+
+# ---------------------------------------------------------------------------
+# THE GTM LOOP — bet -> weekly plan -> reality -> the call.
+#
+# This is the operator, not the artifact factory. Positioning says what to say;
+# the bet says where to fight (ONE channel, with the play); the weekly plan says
+# what to do this week; the review reads real numbers and makes the call. Each is
+# a single grounded LLM call producing structured JSON — no agent fan-out, no
+# generic checklist, nothing that ships without naming the wedge or the ICP.
+# ---------------------------------------------------------------------------
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+# --- prompt context blocks (compact, for grounding the loop calls) ----------
+
+def channel_bet_block(bet: dict[str, Any] | None) -> str:
+    if not bet:
+        return ""
+    play = bet.get("play") or {}
+    return (
+        "THE CHANNEL BET (committed — everything this week serves THIS):\n"
+        f"  channel: {bet.get('channel', '')}\n"
+        f"  why this one: {bet.get('why_this_one', '')}\n"
+        f"  play asset: {play.get('asset', '')}\n"
+        f"  cadence: {play.get('cadence', '')}\n"
+        f"  targets: {play.get('targets', '')}\n"
+        f"  leading indicator: {bet.get('leading_indicator', '')}\n"
+        f"  kill criteria: {bet.get('kill_criteria', '')}"
+    )
+
+
+def _plan_block(plan: dict[str, Any] | None) -> str:
+    if not plan:
+        return "(no plan yet)"
+    lines = [f"focus: {plan.get('focus', '')}"]
+    for i, m in enumerate(plan.get("moves") or [], 1):
+        done = " [DONE]" if m.get("done") else ""
+        lines.append(f"  {i}. {m.get('move', '')}{done} (indicator: {m.get('leading_indicator', '')})")
+    return "\n".join(lines)
+
+
+def _snapshot_block(s: dict[str, Any] | None) -> str:
+    if not s:
+        return "(the founder gave no numbers)"
+    lines: list[str] = []
+    if s.get("signups") not in (None, ""):
+        lines.append(f"new signups/users this week: {s.get('signups')}")
+    if s.get("visitors") not in (None, ""):
+        lines.append(f"visitors/traffic: {s.get('visitors')}")
+    if s.get("top_sources"):
+        lines.append(f"where they came from: {s.get('top_sources')}")
+    if s.get("shipped"):
+        lines.append(f"what the founder actually shipped/did: {s.get('shipped')}")
+    if s.get("notes"):
+        lines.append(f"founder notes: {s.get('notes')}")
+    return "\n".join(lines) or "(the founder gave no numbers)"
+
+
+def _review_block(r: dict[str, Any] | None) -> str:
+    if not r:
+        return ""
+    return (
+        f"what moved: {r.get('what_moved', '')}\n"
+        f"the call: {r.get('the_call', '')} (kind: {r.get('call_kind', '')})\n"
+        f"next focus: {r.get('next_focus', '')}"
+    )
+
+
+# --- THE BET — pick ONE channel and the play -------------------------------
+
+_BET_SYSTEM = (
+    "You are a GTM operator picking ONE channel for an indie founder to bet on for "
+    "the next month. Not a ranked list — ONE channel, the single highest-fit one, "
+    "with the exact play to run on it. Concentration beats spray at 0->1.\n\n"
+    + ANALYST_STYLE
+    + "\n\n"
+    + GUARDRAIL_BLOCK
+    + "\n\nYou have the product brain (wedge, ICP, the ICP's own vocabulary, the "
+    "communities they live in), the positioning diagnosis (which already ranked "
+    "channels), the founder's brief (goal, constraints, what they can produce), and "
+    "real competitor reads. Pick the channel that (a) reaches THIS ICP where they "
+    "already are, (b) fits the product's price/motion and the founder's constraints, "
+    "and (c) a solo founder can actually sustain.\n\n"
+    "Output STRICT JSON only, no preface, no fences:\n"
+    "{\n"
+    '  "channel": "<one channel, specific — not \'social media\' but e.g. '
+    '\'r/<sub> + 2 adjacent subs\', \'comparison-page SEO\', \'Show HN + '
+    'build-in-public on X\'>",\n'
+    '  "why_this_one": "<3-4 sentences grounded in the ICP + product economics + the '
+    'wedge. Name the ICP and the wedge explicitly.>",\n'
+    '  "why_not_runner_up": "<1-2 sentences: the second-best channel and why it waits '
+    '(not never)>",\n'
+    '  "play": {\n'
+    '     "asset": "<the ONE repeatable asset/motion this channel runs on, specific '
+    'to the wedge — e.g. \'one <X> vs <Y> teardown per competitor pair\', not '
+    '\'post content\'>",\n'
+    '     "cadence": "<realistic for a solo founder, e.g. \'2x per week\'>",\n'
+    '     "targets": "<the exact places/terms/people — named subs, search queries, '
+    'account types — drawn from the brain\'s communities + vocabulary>",\n'
+    '     "first_asset": "<the very first concrete asset to make this week>"\n'
+    "  },\n"
+    '  "leading_indicator": "<the early signal within ~2 weeks that says this is '
+    'working — a real number, tied to the brief\'s goal>",\n'
+    '  "kill_criteria": "<a specific result-by-date that means abandon this channel '
+    'and switch>"\n'
+    "}\n\n"
+    "The channel must be one the positioning or brain actually supports. Never pick "
+    "a channel the guardrails forbid or that the founder said already flopped. Be "
+    "concrete enough that the founder knows exactly what to do tomorrow."
+)
+
+
+async def generate_channel_bet(
+    llm: LLM, store: ActionStore, project_id: int, *, avoid_channel: str | None = None
+) -> dict[str, Any]:
+    """Commit the ONE channel bet (channel + the play + leading indicator + kill
+    criteria). Persists it on the project and returns it. Builds the brain +
+    positioning first if they're missing."""
+    ev = gather_evidence(store, project_id)
+    if not ev.get("brain"):
+        from .product_brain import generate_product_brain
+
+        await generate_product_brain(llm, store, project_id)
+        ev = gather_evidence(store, project_id)
+    if not ev.get("positioning"):
+        await generate_positioning(llm, store, project_id)
+        ev = gather_evidence(store, project_id)
+
+    block = render_evidence(
+        ev, include=("brain", "product", "brief", "positioning", "competitors")
+    )
+    if avoid_channel:
+        block += (
+            f"\n\nThe channel '{avoid_channel}' was just KILLED after a fair test — "
+            "do NOT pick it again. Choose the next best channel."
+        )
+    user = block + "\n\nPick the one channel and the play. Output only the JSON object."
+    # glm-5 is a reasoning model — it monologues before the JSON, so give it real
+    # headroom (reasoning + the full object) and force json output.
+    raw = await llm.complete(
+        [Message(role="system", content=_BET_SYSTEM), Message(role="user", content=user)],
+        temperature=0.4,
+        max_tokens=2400,
+        json_mode=True,
+    )
+    bet = parse_json(raw)
+    if not isinstance(bet, dict) or not bet.get("channel") or not (bet.get("play") or {}).get("asset"):
+        log.warning("channel_bet_parse_failed", project_id=project_id)
+        return {}
+    bet["committed_at"] = _now()
+    store.set_channel_bet(project_id, bet)
+    return bet
+
+
+# --- THE WEEKLY PLAN — exactly 3 moves -------------------------------------
+
+_WEEKPLAN_SYSTEM = (
+    "You are a GTM operator writing THIS WEEK's plan for an indie founder who has "
+    "committed to one channel bet. Exactly 3 moves. Each move is shippable by a solo "
+    "founder in under 2 hours, serves the bet's play, and has a leading indicator it "
+    "should move. No vague 'engage the community'. No busywork. No firehose of posts."
+    "\n\n"
+    + ANALYST_STYLE
+    + "\n\nOutput STRICT JSON only, no preface, no fences:\n"
+    "{\n"
+    '  "focus": "<one sentence: what this week is about, tied to the bet>",\n'
+    '  "moves": [\n'
+    '     {"move": "<concrete action serving the play>", "leading_indicator": '
+    '"<the number it should move>", "why": "<1 line tying it to the bet/wedge>"}\n'
+    "  ]\n"
+    "}\n\n"
+    "Exactly 3 moves, no more. If a prior week's review is provided, this week MUST "
+    "respond to it — double down on what moved, drop what didn't. If there's no prior "
+    "week, start with the bet's first_asset as move 1."
+)
+
+
+async def generate_weekly_plan(
+    llm: LLM, store: ActionStore, project_id: int, *, prior_review: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """Produce this week's 3 moves and open a new gtm_weeks row. Returns the week
+    dict (with id + week_num). Commits the bet first if there isn't one yet."""
+    bet = store.get_channel_bet(project_id)
+    if not bet:
+        bet = await generate_channel_bet(llm, store, project_id)
+    if not bet:
+        return {}
+
+    ev = gather_evidence(store, project_id)
+    block = render_evidence(ev, include=("brain", "product", "brief"))
+    block += "\n\n" + channel_bet_block(bet)
+    if prior_review:
+        block += "\n\nLAST WEEK'S REVIEW (this week must respond to it):\n" + _review_block(prior_review)
+    user = block + "\n\nWrite this week's exactly-3 moves. Output only the JSON object."
+    raw = await llm.complete(
+        [Message(role="system", content=_WEEKPLAN_SYSTEM), Message(role="user", content=user)],
+        temperature=0.45,
+        max_tokens=2400,
+        json_mode=True,
+    )
+    parsed = parse_json(raw)
+    if not isinstance(parsed, dict) or not parsed.get("moves"):
+        log.warning("weekly_plan_parse_failed", project_id=project_id)
+        return {}
+    moves: list[dict[str, Any]] = []
+    for m in (parsed.get("moves") or [])[:3]:
+        if not isinstance(m, dict) or not (m.get("move") or "").strip():
+            continue
+        moves.append({
+            "move": m["move"].strip(),
+            "leading_indicator": (m.get("leading_indicator") or "").strip(),
+            "why": (m.get("why") or "").strip(),
+            "done": False,
+        })
+    if not moves:
+        return {}
+    plan = {"focus": (parsed.get("focus") or "").strip(), "moves": moves}
+    return store.create_gtm_week(project_id, plan=plan)
+
+
+# --- THE CALL — read reality, decide, replan -------------------------------
+
+_REVIEW_SYSTEM = (
+    "You are a GTM operator doing the weekly review with an indie founder. You have "
+    "the channel bet, this week's 3 moves, and the founder's ACTUAL numbers for the "
+    "week (signups, where they came from, what they shipped). Read reality honestly. "
+    "Attribute results to moves where you can; mark guesses [hypothesis]. Then make "
+    "THE CALL: continue the bet, adjust the play, or kill the channel and switch.\n\n"
+    + ANALYST_STYLE
+    + "\n\nOutput STRICT JSON only, no preface, no fences:\n"
+    "{\n"
+    '  "what_moved": "<2-4 sentences: what the numbers say vs the moves. Be honest if '
+    'nothing moved.>",\n'
+    '  "attribution": "<best link between what shipped and what moved; mark '
+    '[hypothesis] if unsure>",\n'
+    '  "the_call": "<the decision + the reason, specific to the founder\'s '
+    'situation>",\n'
+    '  "call_kind": "continue|adjust|kill",\n'
+    '  "next_focus": "<what next week should focus on, given the call>"\n'
+    "}\n\n"
+    "Be decisive but fair: 'continue' if the leading indicator moved; 'adjust' if "
+    "mixed or the play needs a tweak; 'kill' ONLY if the channel clearly produced "
+    "nothing after a fair test. Don't flip-flop on one week of thin data — if it's "
+    "too early to tell, say 'continue' and name exactly what you need to see next."
+)
+
+
+async def run_weekly_review(
+    llm: LLM, store: ActionStore, project_id: int, snapshot: dict[str, Any]
+) -> dict[str, Any]:
+    """The loop's heartbeat. Reads the founder's weekly numbers against the plan,
+    writes the review + snapshot onto the current week, re-bets if the call is
+    'kill', generates next week's plan, and refreshes the GTM Plan document.
+    Returns {"review", "week"} (week = the newly opened next week)."""
+    week = store.current_gtm_week(project_id)
+    if not week:
+        # No active week (e.g. first dive never ran the bet) — just open one.
+        new_week = await generate_weekly_plan(llm, store, project_id)
+        render_gtm_plan_doc(store, project_id)
+        return {"review": None, "week": new_week}
+
+    bet = store.get_channel_bet(project_id) or {}
+    ev = gather_evidence(store, project_id)
+    block = render_evidence(ev, include=("brain", "product", "brief"))
+    block += "\n\n" + channel_bet_block(bet)
+    block += "\n\nTHIS WEEK'S PLAN:\n" + _plan_block(week.get("plan"))
+    block += "\n\nTHE FOUNDER'S NUMBERS THIS WEEK:\n" + _snapshot_block(snapshot)
+    user = block + "\n\nDo the review and make the call. Output only the JSON object."
+    raw = await llm.complete(
+        [Message(role="system", content=_REVIEW_SYSTEM), Message(role="user", content=user)],
+        temperature=0.4,
+        max_tokens=2400,
+        json_mode=True,
+    )
+    review = parse_json(raw)
+    if not isinstance(review, dict) or not review.get("the_call"):
+        log.warning("weekly_review_parse_failed", project_id=project_id)
+        review = {
+            "what_moved": "Could not parse the review this time — re-run the weekly review.",
+            "attribution": "",
+            "the_call": "continue",
+            "call_kind": "continue",
+            "next_focus": (week.get("plan") or {}).get("focus", ""),
+        }
+
+    # Persist the founder's numbers + the call onto the week being reviewed.
+    store.set_gtm_week_snapshot(week["id"], snapshot)
+    store.set_gtm_week_review(week["id"], review)
+
+    # Kill -> re-bet on a different channel before replanning.
+    if review.get("call_kind") == "kill" and bet.get("channel"):
+        await generate_channel_bet(llm, store, project_id, avoid_channel=bet.get("channel"))
+
+    next_week = await generate_weekly_plan(llm, store, project_id, prior_review=review)
+    render_gtm_plan_doc(store, project_id)
+    return {"review": review, "week": next_week}
+
+
+# --- the readable document (auto-surfaces in the Documents UI) -------------
+
+def bet_to_markdown(bet: dict[str, Any]) -> str:
+    play = bet.get("play") or {}
+    parts = [
+        "## The bet",
+        f"**Channel:** {bet.get('channel', '—')}",
+        "",
+        bet.get("why_this_one", ""),
+        "",
+        "### The play",
+        f"- **Asset:** {play.get('asset', '—')}",
+        f"- **Cadence:** {play.get('cadence', '—')}",
+        f"- **Targets:** {play.get('targets', '—')}",
+    ]
+    if play.get("first_asset"):
+        parts.append(f"- **First asset:** {play['first_asset']}")
+    parts += [
+        "",
+        f"**Leading indicator:** {bet.get('leading_indicator', '—')}",
+        f"**Kill criteria:** {bet.get('kill_criteria', '—')}",
+    ]
+    if bet.get("why_not_runner_up"):
+        parts += ["", f"_Runner-up held back: {bet['why_not_runner_up']}_"]
+    return "\n".join(parts)
+
+
+def week_to_markdown(week: dict[str, Any]) -> str:
+    plan = week.get("plan") or {}
+    parts = [f"## This week (week {week.get('week_num', '?')})"]
+    if plan.get("focus"):
+        parts += [f"**Focus:** {plan['focus']}", ""]
+    for m in plan.get("moves") or []:
+        check = "x" if m.get("done") else " "
+        ind = m.get("leading_indicator", "")
+        parts.append(f"- [{check}] **{m.get('move', '')}**" + (f" — _{ind}_" if ind else ""))
+    return "\n".join(parts)
+
+
+def review_to_markdown(review: dict[str, Any], week_num: int) -> str:
+    parts = [f"## Last week's call (week {week_num})", review.get("what_moved", "")]
+    if review.get("attribution"):
+        parts += ["", f"_Attribution: {review['attribution']}_"]
+    parts += ["", f"**The call:** {review.get('the_call', '')}"]
+    return "\n".join(p for p in parts if p is not None)
+
+
+def render_gtm_plan_doc(store: ActionStore, project_id: int) -> None:
+    """Render the committed bet + this week's moves (+ last week's call, if any)
+    into the 'gtm_plan' document so it shows up in the existing Documents view."""
+    bet = store.get_channel_bet(project_id)
+    weeks = store.list_gtm_weeks(project_id)
+    if not bet and not weeks:
+        return
+    parts: list[str] = []
+    if bet:
+        parts.append(bet_to_markdown(bet))
+    if weeks:
+        parts.append(week_to_markdown(weeks[0]))
+        # most recent reviewed week (skip the current open one)
+        reviewed = next((w for w in weeks if w.get("review")), None)
+        if reviewed and reviewed["id"] != weeks[0]["id"]:
+            parts.append(review_to_markdown(reviewed["review"], reviewed.get("week_num", 0)))
+    body = strip_stray_cjk("\n\n".join(p for p in parts if p)).strip()
+    if not body:
+        return
+    store.upsert_document(
+        project_id=project_id,
+        kind="gtm_plan",
+        title="GTM Plan",
+        content_md=body,
+        metadata={"bet": bet, "current_week": weeks[0] if weeks else None},
+    )

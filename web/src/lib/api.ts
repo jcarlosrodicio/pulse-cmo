@@ -169,6 +169,58 @@ export type ReconResult = {
   project: Project;
 };
 
+// --- the GTM loop (bet -> this week's moves -> the call) --------------------
+
+export type ChannelBet = {
+  channel: string;
+  why_this_one: string;
+  why_not_runner_up?: string;
+  play: { asset: string; cadence: string; targets: string; first_asset?: string };
+  leading_indicator: string;
+  kill_criteria: string;
+  committed_at?: string;
+};
+
+export type GtmMove = {
+  move: string;
+  leading_indicator: string;
+  why: string;
+  done: boolean;
+};
+
+export type GtmReview = {
+  what_moved: string;
+  attribution?: string;
+  the_call: string;
+  call_kind: "continue" | "adjust" | "kill";
+  next_focus: string;
+};
+
+export type GtmWeek = {
+  id: number;
+  project_id: number;
+  week_num: number;
+  started_at: string;
+  plan: { focus: string; moves: GtmMove[] } | null;
+  snapshot: Record<string, string> | null;
+  review: GtmReview | null;
+};
+
+export type GtmState = {
+  bet: ChannelBet | null;
+  current_week: GtmWeek | null;
+  weeks: GtmWeek[];
+};
+
+// The founder's weekly snapshot — the real signal the loop reads.
+export type WeeklySnapshot = {
+  signups?: string;
+  visitors?: string;
+  top_sources?: string;
+  shipped?: string;
+  notes?: string;
+};
+
 export type ActionType =
   | "seo_fix"
   | "tweet"
@@ -256,6 +308,7 @@ export type DocumentKind =
   | "product_information"
   | "competitor_analysis"
   | "positioning"
+  | "gtm_plan"
   | "brand_voice"
   | "marketing_strategy";
 
@@ -584,7 +637,7 @@ export const api = {
   // runs
   async startRun(
     projectId: number,
-    kind: "first_dive" | "daily" | "manual" | "targeted",
+    kind: "first_dive" | "daily" | "weekly" | "weekly_review" | "manual" | "targeted",
     instruction = "",
     extra?: { target?: TargetKind; topic?: string },
   ) {
@@ -615,6 +668,29 @@ export const api = {
     };
     es.onerror = () => es.close();
     return () => es.close();
+  },
+
+  // gtm loop (the bet -> this week's moves -> the call)
+  async getGtm(projectId: number) {
+    return json<GtmState>(await fetch(`${API}/projects/${projectId}/gtm`));
+  },
+  async submitWeeklyReview(projectId: number, snapshot: WeeklySnapshot) {
+    return json<{ run_id: number; stream_url: string }>(
+      await fetch(`${API}/projects/${projectId}/weekly/review`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(snapshot),
+      }),
+    );
+  },
+  async setGtmMoveDone(projectId: number, weekId: number, index: number, done: boolean) {
+    return json<{ week: GtmWeek }>(
+      await fetch(`${API}/projects/${projectId}/gtm/move`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ week_id: weekId, index, done }),
+      }),
+    );
   },
 
   // actions

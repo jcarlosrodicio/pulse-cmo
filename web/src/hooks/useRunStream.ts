@@ -116,7 +116,7 @@ export function useRunStream(projectId: number) {
 
   const start = useCallback(
     async (
-      kind: "first_dive" | "daily" | "manual" | "targeted" = "daily",
+      kind: "first_dive" | "daily" | "weekly" | "weekly_review" | "manual" | "targeted" = "daily",
       extra?: { target?: TargetKind; topic?: string; instruction?: string },
     ) => {
       const r = await api.startRun(projectId, kind, extra?.instruction ?? "", {

@@ -47,7 +47,13 @@ from .launch import (
     infer_intake,
     launch_track_advice,
 )
-from .orchestrator import run_daily, run_first_dive, run_manual, run_targeted
+from .orchestrator import (
+    run_first_dive,
+    run_manual,
+    run_targeted,
+    run_weekly,
+    run_weekly_review,
+)
 from .settings_store import SettingsStore
 from .store import ActionStore
 from .traction import scan_traction
@@ -79,7 +85,7 @@ class UpdateProject(BaseModel):
 
 
 class StartRun(BaseModel):
-    kind: str = Field(pattern="^(first_dive|daily|manual|targeted)$")
+    kind: str = Field(pattern="^(first_dive|daily|weekly|weekly_review|manual|targeted)$")
     instruction: str = ""
     # For `kind="targeted"`: which channel to generate.
     target: str | None = Field(
@@ -94,6 +100,21 @@ class UpdateAction(BaseModel):
     title: str | None = None
     content: str | None = None
     chosen_variant: int | None = None
+
+
+class WeeklyReview(BaseModel):
+    """The founder's weekly snapshot — the real signal the loop reads."""
+    signups: str | None = None       # "12" or "12 (up from 7)"
+    visitors: str | None = None
+    top_sources: str = ""            # free text: "HN, 2 subreddits, direct"
+    shipped: str = ""                # free text: what they actually did this week
+    notes: str = ""
+
+
+class GtmMoveDone(BaseModel):
+    week_id: int
+    index: int
+    done: bool
 
 
 class UpdateDocument(BaseModel):
@@ -247,9 +268,14 @@ async def _execute_run(
                 stream = run_first_dive(
                     config=config, llm=llm, store=store, project_id=project_id, run_id=run_id
                 )
-            elif kind == "daily":
-                stream = run_daily(
+            elif kind in ("weekly", "daily"):  # "daily" kept as a back-compat alias
+                stream = run_weekly(
                     config=config, llm=llm, store=store, project_id=project_id, run_id=run_id
+                )
+            elif kind == "weekly_review":
+                stream = run_weekly_review(
+                    config=config, llm=llm, store=store, project_id=project_id,
+                    run_id=run_id, instruction=instruction,
                 )
             elif kind == "targeted":
                 stream = run_targeted(
@@ -318,8 +344,8 @@ async def _execute_run(
                 tokens=tracker.total_tokens,
                 cost_usd=round(tracker.cost_usd, 6),
             )
-            # snapshot a version after a successful first dive / daily run
-            if status == "done" and kind in ("first_dive", "daily"):
+            # snapshot a version after a successful first dive / weekly review
+            if status == "done" and kind in ("first_dive", "weekly_review"):
                 try:
                     await create_version(
                         store=store, llm=llm, project_id=project_id, run_id=run_id, kind=kind
@@ -347,8 +373,10 @@ def create_app(config: Config) -> FastAPI:
         background_tasks.add(t)
         t.add_done_callback(background_tasks.discard)
 
-    async def _daily_for_project(project_id: int) -> None:
-        run_id = store.create_run(project_id, kind="daily")
+    async def _scheduled_weekly(project_id: int) -> None:
+        """Scheduled lean refresh — rolls the GTM week forward only when stale, so
+        it's safe to fire on the existing daily cron (it self-throttles to weekly)."""
+        run_id = store.create_run(project_id, kind="weekly")
         await _execute_run(
             config=config,
             llm=llm,
@@ -356,7 +384,7 @@ def create_app(config: Config) -> FastAPI:
             broker=broker,
             project_id=project_id,
             run_id=run_id,
-            kind="daily",
+            kind="weekly",
         )
 
     def _spawn_traction_scan(project_id: int) -> None:
@@ -398,7 +426,7 @@ def create_app(config: Config) -> FastAPI:
             except (ValueError, TypeError):
                 continue
             scheduler.add_job(
-                _daily_for_project,
+                _scheduled_weekly,
                 CronTrigger(hour=hh, minute=mm),
                 args=[project_id],
                 id=f"daily-{project_id}-{i}",
@@ -682,6 +710,44 @@ def create_app(config: Config) -> FastAPI:
     @app.get("/projects/{project_id}/runs")
     async def list_project_runs(project_id: int) -> list[dict]:
         return store.list_runs(project_id)
+
+    # --- GTM loop (the bet -> this week's moves -> the call) ---------------
+
+    @app.get("/projects/{project_id}/gtm")
+    async def get_gtm(project_id: int) -> dict:
+        if not store.get_project(project_id):
+            raise HTTPException(404, "project not found")
+        return {
+            "bet": store.get_channel_bet(project_id),
+            "current_week": store.current_gtm_week(project_id),
+            "weeks": store.list_gtm_weeks(project_id),
+        }
+
+    @app.post("/projects/{project_id}/weekly/review")
+    async def submit_weekly_review(project_id: int, body: WeeklyReview) -> dict:
+        """Log the week's real numbers -> Pulse makes the call + replans next
+        week. Runs as a tracked run so it streams + shows in history like a dive."""
+        if not store.get_project(project_id):
+            raise HTTPException(404, "project not found")
+        snapshot = {k: v for k, v in body.model_dump().items() if v not in (None, "")}
+        run_id = store.create_run(project_id, kind="weekly_review")
+        _spawn(
+            _execute_run(
+                config=config, llm=llm, store=store, broker=broker,
+                project_id=project_id, run_id=run_id, kind="weekly_review",
+                instruction=json.dumps(snapshot),
+            )
+        )
+        return {"run_id": run_id, "stream_url": f"/runs/{run_id}/stream"}
+
+    @app.post("/projects/{project_id}/gtm/move")
+    async def set_gtm_move(project_id: int, body: GtmMoveDone) -> dict:
+        if not store.get_project(project_id):
+            raise HTTPException(404, "project not found")
+        week = store.set_gtm_move_done(body.week_id, body.index, body.done)
+        from .strategy_core import render_gtm_plan_doc
+        render_gtm_plan_doc(store, project_id)  # keep the doc checkboxes in sync
+        return {"week": week}
 
     # --- actions -----------------------------------------------------------
 

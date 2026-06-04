@@ -321,6 +321,7 @@ function humanKind(kind: DocumentKind): string {
     product_information: "Product Information",
     competitor_analysis: "Competitor Analysis",
     positioning: "Positioning & Strategy",
+    gtm_plan: "GTM Plan",
     brand_voice: "Brand Voice",
     marketing_strategy: "Marketing Strategy",
   }[kind];
