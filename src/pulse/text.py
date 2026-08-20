@@ -179,6 +179,25 @@ def parse_json_lenient(raw: str):
             return json.loads(attempt)
         except Exception:
             pass
+
+    # If a reasoning gateway puts the final JSON after prose or intermediate
+    # examples, decode every complete embedded value and keep the one that
+    # finishes last. This avoids accepting an earlier schema/example object.
+    decoder = json.JSONDecoder()
+    embedded: list[tuple[int, int, object]] = []
+    for index, char in enumerate(s):
+        if char not in "[{":
+            continue
+        try:
+            obj, end = decoder.raw_decode(s, index)
+        except Exception:
+            continue
+        if isinstance(obj, (dict, list)):
+            embedded.append((index, end, obj))
+    if embedded:
+        _, _, obj = max(embedded, key=lambda item: (item[1], item[1] - item[0]))
+        return obj
+
     try:
         from json_repair import repair_json
 
