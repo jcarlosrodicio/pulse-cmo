@@ -295,7 +295,13 @@ async def generate_positioning(
     )
     pos = parse_json(raw)
     if not isinstance(pos, dict) or not pos.get("value_prop"):
-        log.warning("positioning_parse_failed", project_id=project_id)
+        log.warning(
+            "positioning_parse_failed",
+            project_id=project_id,
+            raw_len=len(raw or ""),
+            parsed_type=type(pos).__name__,
+            parsed_keys=sorted(pos.keys())[:20] if isinstance(pos, dict) else [],
+        )
         return {}
     body = strip_stray_cjk(positioning_to_markdown(pos))
     store.upsert_document(
