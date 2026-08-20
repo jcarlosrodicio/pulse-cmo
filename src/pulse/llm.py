@@ -205,7 +205,12 @@ class LLM:
             max_tokens=max_tokens,
             json_mode=json_mode,
         )
-        return strip_reasoning(msg.get("content") or "")
+        content = msg.get("content") or ""
+        if not content and json_mode:
+            # Some OpenAI-compatible reasoning gateways put the structured
+            # answer in reasoning_content even when thinking is disabled.
+            content = msg.get("reasoning_content") or msg.get("reasoning") or ""
+        return strip_reasoning(content)
 
     async def complete_chat(
         self,
