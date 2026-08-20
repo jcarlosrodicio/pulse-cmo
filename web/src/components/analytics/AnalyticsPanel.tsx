@@ -357,14 +357,20 @@ function TractionTab({ project }: { project: Project }) {
       {/* header row */}
       <div className="flex items-center gap-2">
         <div className="flex-1">
-          <div className="text-[10.5px] uppercase tracking-[0.14em] text-muted">Digital footprint</div>
+          <div className="text-[10.5px] uppercase tracking-[0.14em] text-muted">Confirmed digital footprint</div>
           <div className="text-[12px] text-muted-strong font-mono">
-            {traction.totals?.mentions ?? 0} mentions · {traction.totals?.platforms ?? 0} platforms
+            {traction.totals?.accepted ?? traction.totals?.mentions ?? 0} confirmed mentions · {traction.totals?.platforms ?? 0} platforms
             {traction.scanned_at ? ` · ${relScan(traction.scanned_at)}` : ""}
           </div>
         </div>
         <ScanButton scanning={false} onClick={scan} label="Rescan" small />
       </div>
+
+      {!traction.entity_resolution && (
+        <div className="rounded-lg border px-3 py-2 text-[11.5px] text-muted" style={{ borderColor: "var(--border-strong)" }}>
+          This scan predates entity verification. Rescan to separate Tally expense tracker from same-name products and generic uses of “tally”.
+        </div>
+      )}
 
       {/* summary tiles */}
       <div className="grid grid-cols-3 gap-2">
@@ -373,7 +379,7 @@ function TractionTab({ project }: { project: Project }) {
           value={strongest?.label || "—"}
           accent
         />
-        <FootprintTile label="Mentions" value={String(traction.totals?.mentions ?? 0)} />
+        <FootprintTile label="Confirmed" value={String(traction.totals?.accepted ?? traction.totals?.mentions ?? 0)} />
         <FootprintTile
           label="Sentiment"
           value={`${sent.positive ?? 0}+ / ${sent.negative ?? 0}−`}
@@ -382,7 +388,7 @@ function TractionTab({ project }: { project: Project }) {
 
       {/* insights */}
       {traction.insights && traction.insights.length > 0 && (
-        <SectionCard title="Where to focus" subtitle="From your footprint">
+        <SectionCard title="Where to focus" subtitle="From confirmed mentions only">
           <ul className="space-y-2">
             {traction.insights.map((ins, i) => (
               <li key={i} className="flex items-start gap-2 text-[12.5px] text-fg-dim">
@@ -396,6 +402,11 @@ function TractionTab({ project }: { project: Project }) {
 
       {/* per-platform */}
       <div className="space-y-3">
+        {traction.entity_resolution && (
+          <div className="text-[11px] text-muted">
+            {traction.totals?.candidates ?? 0} candidates checked · {traction.totals?.rejected ?? 0} rejected · {traction.totals?.uncertain ?? 0} uncertain. Only accepted Tally expense-tracker matches appear below.
+          </div>
+        )}
         {platforms.map((p) => (
           <PlatformCard key={p.key} platform={p} />
         ))}

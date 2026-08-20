@@ -19,6 +19,7 @@ import httpx
 import structlog
 
 from .config import Config
+from .entity_resolution import build_entity_profile, deterministic_entity_check, resolve_ambiguous
 from .llm import LLM, Message
 
 log = structlog.get_logger()
@@ -53,12 +54,14 @@ _PLATFORM_RULES: list[tuple[re.Pattern[str], str, str]] = [
 ]
 
 
-def _classify(url: str) -> tuple[str, str]:
+def _classify(url: str, source: str = "") -> tuple[str, str]:
+    if source == "news":
+        return "news", "News"
     host = (urlparse(url).hostname or "").lower()
     for pat, key, label in _PLATFORM_RULES:
         if pat.search(host):
             return key, label
-    return "web", "Web & News"
+    return "web", "Web"
 
 
 # ---------------------------------------------------------------------------
@@ -83,21 +86,43 @@ def _parse_web_items(data: dict[str, Any]) -> list[dict[str, Any]]:
     return out
 
 
-async def _web_search(base_url: str, api_key: str, query: str, n: int = 8) -> list[dict[str, Any]]:
+async def _web_search(
+    base_url: str,
+    api_key: str,
+    query: str,
+    n: int = 8,
+    *,
+    path: str = "/v1/tools/search",
+    source: str = "web",
+) -> list[dict[str, Any]]:
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     try:
         async with httpx.AsyncClient(timeout=30.0) as cx:
             r = await cx.post(
-                f"{base_url.rstrip('/')}/v1/tools/search",
+                f"{base_url.rstrip('/')}{path}",
                 headers=headers,
                 json={"query": query, "num_results": n},
             )
         if r.status_code >= 400:
             return []
-        return _parse_web_items(r.json())
+        items = _parse_web_items(r.json())
+        for item in items:
+            item["source"] = source
+        return items
     except Exception as e:
         log.warning("traction_web_search_failed", query=query, error=repr(e))
         return []
+
+
+async def _news_search(base_url: str, api_key: str, query: str, n: int = 8) -> list[dict[str, Any]]:
+    return await _web_search(
+        base_url,
+        api_key,
+        query,
+        n,
+        path="/v1/tools/search/news",
+        source="news",
+    )
 
 
 async def _reddit_search(query: str, n: int = 12) -> list[dict[str, Any]]:
@@ -123,6 +148,7 @@ async def _reddit_search(query: str, n: int = 12) -> list[dict[str, Any]]:
                     "snippet": (p.get("selftext") or "")[:280],
                     "date": _ts_to_iso(p.get("created_utc")),
                     "extra": f"r/{p.get('subreddit')} · {p.get('score', 0)} pts · {p.get('num_comments', 0)} comments",
+                    "source": "reddit",
                 })
             return out
     return []
@@ -151,6 +177,7 @@ async def _hn_search(query: str, n: int = 12) -> list[dict[str, Any]]:
             "snippet": text,
             "date": hit.get("created_at") or "",
             "extra": f"{hit.get('points') or 0} pts",
+            "source": "hn",
         })
     return out
 
@@ -212,10 +239,26 @@ async def scan_traction(
     name = (project.get("name") or "").strip()
     url = project.get("url") or ""
     host = (urlparse(url).hostname or "").replace("www.", "")
-    bare = host.split(".")[0] if host else name
+    identity = build_entity_profile(project, store.get_product_brain(project_id))
 
-    # query terms: name, host, and name+context combos
-    terms = list(dict.fromkeys([t for t in [name, host, bare] if t]))
+    # Brand discovery stays broad, but the primary queries carry the product
+    # category or a verified identifier. The bare name remains as a candidate
+    # source and is filtered by entity resolution below.
+    query_terms: list[str] = []
+
+    def add_query(q: str) -> None:
+        q = (q or "").strip()
+        if q and q.lower() not in {x.lower() for x in query_terms}:
+            query_terms.append(q)
+
+    for phrase in ("expense tracker", "personal finance", "control de gastos", "expenses"):
+        add_query(f'"{name}" "{phrase}"')
+    for identifier in identity.get("strong_identifiers") or []:
+        add_query(identifier)
+    if host:
+        add_query(host)
+    add_query(f'"{name}" review')
+    add_query(name)
 
     base_url = config.web.base_url
     try:
@@ -224,20 +267,21 @@ async def scan_traction(
         api_key = ""
 
     # ---- fan out searches ----
-    tasks: list = []
+    tasks: list[tuple[str, Any]] = []
     if api_key:
-        for q in [name, f'"{name}" review', f"{name} alternative", f"{name} vs", host]:
-            if q.strip():
-                tasks.append(_web_search(base_url, api_key, q, 8))
-    for q in terms[:2]:
-        tasks.append(_reddit_search(q, 12))
-        tasks.append(_hn_search(q, 12))
+        for q in query_terms[:8]:
+            tasks.append(("web", _web_search(base_url, api_key, q, 8)))
+        for q in query_terms[:4]:
+            tasks.append(("news", _news_search(base_url, api_key, q, 8)))
+    for q in query_terms[:4]:
+        tasks.append(("reddit", _reddit_search(q, 12)))
+        tasks.append(("hn", _hn_search(q, 12)))
 
-    results = await asyncio.gather(*tasks, return_exceptions=True)
+    results = await asyncio.gather(*(task for _, task in tasks), return_exceptions=True)
 
     # ---- dedupe + classify ----
     seen: dict[str, dict[str, Any]] = {}
-    for batch in results:
+    for (source, _), batch in zip(tasks, results):
         if isinstance(batch, Exception):
             continue
         for item in batch:
@@ -248,12 +292,58 @@ async def scan_traction(
             ihost = (urlparse(u).hostname or "").replace("www.", "")
             if host and ihost == host:
                 continue
-            key, label = _classify(u)
+            item["source"] = item.get("source") or source
+            key, label = _classify(u, item["source"])
             item["platform"] = key
             item["platform_label"] = label
+            item["id"] = u
             seen[u] = item
 
-    mentions = list(seen.values())
+    candidates = list(seen.values())
+    accepted: list[dict[str, Any]] = []
+    ambiguous: list[dict[str, Any]] = []
+    rejected: list[dict[str, Any]] = []
+    for item in candidates:
+        verdict = deterministic_entity_check(item, identity)
+        item.update(
+            entity_decision=verdict["decision"],
+            entity=verdict["entity"],
+            entity_confidence=verdict["confidence"],
+            entity_match_reason=verdict["reason"],
+        )
+        if verdict["decision"] == "accept":
+            accepted.append(item)
+        elif verdict["decision"] == "ambiguous":
+            ambiguous.append(item)
+        else:
+            rejected.append(item)
+
+    if ambiguous:
+        verdicts = await resolve_ambiguous(
+            llm,
+            profile=identity,
+            items=ambiguous,
+            source="traction brand mentions",
+        )
+        for item in ambiguous:
+            verdict = verdicts.get(item["id"], {
+                "decision": "uncertain",
+                "entity": "unknown",
+                "confidence": 0.4,
+                "reason": "no entity verdict",
+            })
+            item.update(
+                entity_decision=verdict["decision"],
+                entity=verdict["entity"],
+                entity_confidence=verdict["confidence"],
+                entity_match_reason=verdict["reason"],
+            )
+            if verdict["decision"] == "accept":
+                accepted.append(item)
+            elif verdict["decision"] == "reject":
+                rejected.append(item)
+
+    mentions = accepted
 
     # group by platform
     groups: dict[str, dict[str, Any]] = {}
@@ -274,6 +364,8 @@ async def scan_traction(
         user = (
             f"PRODUCT: {name} ({url})\n"
             f"WHAT IT DOES: {project.get('description') or '(unknown)'}\n\n"
+            "ENTITY RULE: these are already resolved mentions of this exact product; "
+            "do not merge them with same-name products or generic uses of the word.\n"
             f"MENTIONS BY PLATFORM:\n{json.dumps(payload, ensure_ascii=False)[:6000]}\n\n"
             "Analyze the footprint. Output only the JSON object."
         )
@@ -304,12 +396,45 @@ async def scan_traction(
     summary = {
         "status": "done",
         "scanned_at": datetime.now(timezone.utc).isoformat(),
-        "query_terms": terms,
-        "totals": {"mentions": len(mentions), "platforms": len(groups)},
+        "query_terms": query_terms,
+        "totals": {
+            "mentions": len(mentions),
+            "platforms": len(groups),
+            "candidates": len(candidates),
+            "accepted": len(mentions),
+            "rejected": len(rejected),
+            "uncertain": sum(1 for item in ambiguous if item.get("entity_decision") == "uncertain"),
+        },
         "strongest": synth.get("strongest") or (platform_list[0]["key"] if platform_list else None),
         "sentiment": synth.get("sentiment") or {},
         "insights": synth.get("insights") or _fallback_insights(platform_list),
         "platforms": platform_list,
+        "entity_resolution": {
+            "profile": identity,
+            "rejected": [
+                {
+                    "title": item.get("title", ""),
+                    "url": item.get("url", ""),
+                    "snippet": item.get("snippet", ""),
+                    "source": item.get("source", ""),
+                    "entity": item.get("entity", "unknown"),
+                    "confidence": item.get("entity_confidence", 0.0),
+                    "reason": item.get("entity_match_reason", ""),
+                }
+                for item in rejected[:30]
+            ],
+            "uncertain": [
+                {
+                    "title": item.get("title", ""),
+                    "url": item.get("url", ""),
+                    "snippet": item.get("snippet", ""),
+                    "source": item.get("source", ""),
+                    "confidence": item.get("entity_confidence", 0.0),
+                    "reason": item.get("entity_match_reason", ""),
+                }
+                for item in ambiguous if item.get("entity_decision") == "uncertain"
+            ][:30],
+        },
     }
     store.set_traction_summary(project_id, summary)
     log.info("traction_scan_done", project_id=project_id, mentions=len(mentions), platforms=len(groups))

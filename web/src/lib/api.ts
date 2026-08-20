@@ -58,6 +58,8 @@ export type TractionMention = {
   extra?: string;
   platform: string;
   platform_label: string;
+  entity_confidence?: number;
+  entity_match_reason?: string;
 };
 
 export type TractionPlatform = {
@@ -75,11 +77,22 @@ export type TractionSummary = {
   started_at?: string;
   scanned_at?: string;
   query_terms?: string[];
-  totals?: { mentions: number; platforms: number };
+  totals?: {
+    mentions: number;
+    platforms: number;
+    candidates?: number;
+    accepted?: number;
+    rejected?: number;
+    uncertain?: number;
+  };
   strongest?: string | null;
   sentiment?: { positive?: number; neutral?: number; negative?: number };
   insights?: string[];
   platforms?: TractionPlatform[];
+  entity_resolution?: {
+    rejected?: Array<{ title: string; url: string; reason: string }>;
+    uncertain?: Array<{ title: string; url: string; reason: string }>;
+  };
 };
 
 export type GeoEngine = { engine: string; tokens: string[]; blocked: boolean };
