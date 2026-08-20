@@ -160,6 +160,18 @@ class LLM:
         self._clients[key] = client
         return client
 
+    @staticmethod
+    def _extra_body(provider: ProviderConfig) -> dict[str, Any]:
+        """Disable hidden reasoning for DeepSeek aliases that emit empty answers.
+
+        NAN's DeepSeek endpoint can spend the whole output budget on reasoning
+        unless this provider-specific option is sent. Other providers keep
+        their existing request shape.
+        """
+        if "deepseek" in provider.model.lower():
+            return {"thinking": {"type": "disabled"}}
+        return {}
+
     def _select_providers(
         self, provider_name: str | None, model_override: str | None
     ) -> list[ProviderConfig]:
@@ -266,6 +278,9 @@ class LLM:
                 }
                 if max_tokens is not None:
                     kwargs["max_tokens"] = max_tokens
+                extra_body = self._extra_body(provider)
+                if extra_body:
+                    kwargs["extra_body"] = extra_body
                 if tools:
                     kwargs["tools"] = tools
                 if json_mode:
@@ -315,6 +330,9 @@ class LLM:
                 }
                 if max_tokens is not None:
                     kwargs["max_tokens"] = max_tokens
+                extra_body = self._extra_body(prov)
+                if extra_body:
+                    kwargs["extra_body"] = extra_body
                 if tools:
                     kwargs["tools"] = tools
                 try:
