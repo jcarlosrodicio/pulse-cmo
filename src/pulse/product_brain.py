@@ -124,7 +124,7 @@ async def generate_product_brain(llm: LLM, store: ActionStore, project_id: int) 
         raw = await llm.complete(
             [Message(role="system", content=_BRAIN_SYSTEM), Message(role="user", content=user)],
             temperature=0.4,
-            max_tokens=5000,
+            max_tokens=12000,
             json_mode=True,
         )
     except Exception as e:

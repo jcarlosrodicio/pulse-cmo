@@ -190,7 +190,7 @@ def make_strategy_tools(llm: LLM, store: ActionStore, project_id: int) -> list[T
         plan = await llm.complete(
             [Message(role="system", content=system), Message(role="user", content=user)],
             temperature=0.5,
-            max_tokens=2400,
+            max_tokens=8000,
         )
         # generate -> verify -> revise: a separate critic rewrites generic/off-wedge
         # lines and strips any meta-narration ("Let me analyze…") before saving.
