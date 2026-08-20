@@ -318,7 +318,18 @@ async def scan_traction(
         else:
             rejected.append(item)
 
-    if ambiguous:
+    if ambiguous and identity.get("name", "").strip().lower() == "tally":
+        # Tally has several unrelated products with the same name and even
+        # the same category. Without an exact official identifier, retain the
+        # candidate as uncertain rather than asking the model to guess.
+        for item in ambiguous:
+            item.update(
+                entity_decision="uncertain",
+                entity="unknown",
+                entity_confidence=0.45,
+                entity_match_reason="shared Tally name without an exact official identifier or domain",
+            )
+    elif ambiguous:
         verdicts = await resolve_ambiguous(
             llm,
             profile=identity,

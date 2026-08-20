@@ -183,6 +183,18 @@ def deterministic_entity_check(item: dict[str, Any], profile: dict[str, Any]) ->
             "reason": "result does not mention the product name or an official identifier",
         }
 
+    # Tally is a highly ambiguous brand. Category language such as "expense
+    # tracker" also describes several unrelated apps, so it is not enough to
+    # accept a candidate as our product. Keep it unresolved for review instead
+    # of letting a plausible same-name result contaminate traction knowledge.
+    if name == "tally":
+        return {
+            "decision": "ambiguous",
+            "entity": "unknown",
+            "confidence": 0.45,
+            "reason": "shared Tally name without an exact official identifier or domain",
+        }
+
     phrase_hits = [p for p in profile.get("positive_phrases", []) if p and p in text]
     strong_category_hits = [
         p for p in phrase_hits
@@ -224,6 +236,8 @@ Return STRICT JSON only, an array in the same order as the candidates:
 Rules:
 - Exact official domains, app package IDs, App Store IDs, or official URL are
   decisive positive evidence.
+- For Tally specifically, do not accept a candidate without one of those exact
+  identifiers or the official domain; category similarity is insufficient.
 - A generic word match is not a mention of our product.
 - Generic finance words are not enough to identify our app.
 - If evidence is insufficient, set is_relevant=false, entity=unknown, and use

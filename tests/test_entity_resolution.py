@@ -19,16 +19,24 @@ class EntityResolutionTests(unittest.TestCase):
             }
         )
 
-    def test_accepts_specific_expense_tracker_context(self) -> None:
+    def test_accepts_verified_tally_identity(self) -> None:
         cases = [
-            {"title": "Tally expense tracker adds faster entry", "url": "https://example.com/a"},
-            {"title": "Review of Tally personal finance app", "url": "https://example.com/b"},
             {"title": "Tally mobile app", "url": "https://tally-rcuadrado.vercel.app/en"},
             {"title": "Android app", "url": "https://play.google.com/store/apps/details?id=com.rcuadrado.tally"},
         ]
         for item in cases:
             with self.subTest(item=item):
                 self.assertEqual(deterministic_entity_check(item, self.profile)["decision"], "accept")
+
+    def test_does_not_accept_same_name_category_matches(self) -> None:
+        cases = [
+            {"title": "Tally expense tracker adds faster entry", "url": "https://example.com/a"},
+            {"title": "Tally AI: Expense Tracker", "url": "https://apps.apple.com/app/id6755501884"},
+            {"title": "Tally Finance budgeting app", "url": "https://tallyfi.app/"},
+        ]
+        for item in cases:
+            with self.subTest(item=item):
+                self.assertNotEqual(deterministic_entity_check(item, self.profile)["decision"], "accept")
 
     def test_rejects_conflicting_tally_entities(self) -> None:
         cases = [
