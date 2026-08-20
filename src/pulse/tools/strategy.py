@@ -191,6 +191,7 @@ def make_strategy_tools(llm: LLM, store: ActionStore, project_id: int) -> list[T
             [Message(role="system", content=system), Message(role="user", content=user)],
             temperature=0.5,
             max_tokens=20000,
+            fallback_to_reasoning=True,
         )
         # generate -> verify -> revise: a separate critic rewrites generic/off-wedge
         # lines and strips any meta-narration ("Let me analyze…") before saving.

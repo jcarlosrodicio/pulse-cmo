@@ -360,6 +360,7 @@ async def critique_revise(
             [Message(role="system", content=_CRITIC_SYSTEM), Message(role="user", content=user)],
             temperature=0.4,
             max_tokens=20000,
+            fallback_to_reasoning=True,
         )
     except Exception as e:
         log.warning("critique_revise_failed", kind=kind, error=repr(e))

@@ -186,6 +186,7 @@ class LLM:
         temperature: float | None = None,
         max_tokens: int | None = None,
         json_mode: bool = False,
+        fallback_to_reasoning: bool = False,
     ) -> str:
         msg = await self.complete_chat(
             [{"role": m.role, "content": m.content} for m in messages],
@@ -194,7 +195,7 @@ class LLM:
             json_mode=json_mode,
         )
         content = msg.get("content") or ""
-        if not content and json_mode:
+        if not content and (json_mode or fallback_to_reasoning):
             # Some OpenAI-compatible reasoning gateways put the structured
             # answer in reasoning_content instead of the normal content field.
             content = msg.get("reasoning_content") or msg.get("reasoning") or ""
