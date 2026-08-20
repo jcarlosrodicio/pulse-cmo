@@ -359,7 +359,7 @@ async def critique_revise(
         revised = await llm.complete(
             [Message(role="system", content=_CRITIC_SYSTEM), Message(role="user", content=user)],
             temperature=0.4,
-            max_tokens=8000,
+            max_tokens=20000,
         )
     except Exception as e:
         log.warning("critique_revise_failed", kind=kind, error=repr(e))

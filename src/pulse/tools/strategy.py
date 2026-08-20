@@ -190,13 +190,15 @@ def make_strategy_tools(llm: LLM, store: ActionStore, project_id: int) -> list[T
         plan = await llm.complete(
             [Message(role="system", content=system), Message(role="user", content=user)],
             temperature=0.5,
-            max_tokens=8000,
+            max_tokens=20000,
         )
         # generate -> verify -> revise: a separate critic rewrites generic/off-wedge
         # lines and strips any meta-narration ("Let me analyze…") before saving.
         plan = await critique_revise(
             llm, kind="30-day marketing plan", draft=plan, brain=ev.get("brain")
         )
+        if not plan.strip():
+            return json.dumps({"ok": False, "error": "marketing strategy generation returned empty content"})
         run_id = store.latest_run_id(project_id)
         action_id = store.create_action(
             project_id=project_id,
